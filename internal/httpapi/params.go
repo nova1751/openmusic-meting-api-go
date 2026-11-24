@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 )
 
 func publicRequest(q url.Values) music.Request {

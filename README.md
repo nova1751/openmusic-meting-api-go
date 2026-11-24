@@ -21,7 +21,7 @@ export METING_API_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/meting
 ```
 
-默认监听 `127.0.0.1:3000`。`GET /livez` 和 `GET /readyz` 可直接访问。以下命令使用完整签名请求搜索网易云歌曲：
+默认监听 `127.0.0.1:3000`。`GET /livez` 和 `GET /readyz` 可直接访问。可用下面的完整签名请求搜索网易云歌曲。
 
 ```sh
 python3 - <<'PY'
@@ -80,7 +80,7 @@ curl -fsS http://127.0.0.1:3000/readyz
 
 Compose 只映射 Go 服务。后台默认入口为 `http://127.0.0.1:3000/admin`，原管理后台仍负责生成 API Token、维护 Cookie 和配置授权。相同容器网络内可使用 `http://meting:3000` 访问 Go 服务。
 
-迁移既有部署时，先停止旧服务并完整备份 `DATA_DIR`，然后将备份副本配置为 `LEGACY_DATA_DIR` 做验证。需要一并保留 Cookie 加密密钥。如从环境变量读取密钥，兼容容器也需要相同的 `METING_COOKIE_ENCRYPTION_KEY)。如通过 `METING_COOKIE_KEY_FILE` 指定路径，文件必须位于已挂载目录，并使用容器内路径。Go 进程无需挂载这个目录。兼容容器默认使用 UID 和 GID 1010，可用 `LEGACY_UID`、`LEGACY_GID` 匹配已有目录权限。验收后可在同一套 OpenMusic 配置中切换地址，沿用现有 Token。
+既有部署请参阅 [从 Node.js 迁移到 Go](docs/MIGRATE_NODE_TO_GO.md)，按备份、并行验证、切流和回滚顺序操作。
 
 若已有可访问的原版 Node.js 服务，只配置 `LEGACY_URL` 也能启动普通反向代理。要启用网易云原生分流，Node.js 需运行随仓库提供的 `compat/bridge.mjs`，并在两个进程配置相同的 `LEGACY_BRIDGE_KEY`。兼容进程应位于 Go 服务可访问的私有网络。
 
@@ -94,3 +94,25 @@ node --check compat/bridge.mjs
 ```
 
 [详细实现和兼容差异](docs/IMPLEMENTATION.md) · [上游 OpenMusic 授权协议](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb9030ff2b8ab295c213f8542807c1a95e6cf540/docs/OPENMUSIC_AUTH.md)
+
+## 预编译发行包与镜像
+
+GitHub Release 的压缩包对应 Linux、macOS 和 Windows 的 AMD64、ARM64 架构。下载所需架构的压缩包与校验文件后，运行 `sha256sum -c --ignore-missing SHA256SUMS`，也可执行 `meting --version` 确认版本。Release 还包含 Linux AMD64 与 ARM64 的 Go 容器归档，用 `docker load -i <归档文件>` 导入。归档的校验值在 `SHA256SUMS.docker` 中。 [GitHub Releases](https://github.com/nova1751/openmusic-meting-api-go/releases)
+
+两张发布镜像分别用于 Go 服务和兼容子服务。要部署一组已发布的同版本镜像，先按上节配置 `.env`，然后设置版本并运行以下命令。
+
+```sh
+export METING_VERSION=v0.1.0
+docker compose -f compose.yaml -f compose.release.yaml pull
+docker compose -f compose.yaml -f compose.release.yaml up -d --no-build --wait
+```
+
+GHCR 的新容器包默认是私有的。要支持匿名拉取，仓库维护者需在两个容器包的 Package settings 中把可见性设为 Public。公开发行页上的容器归档可直接下载并导入。 [GitHub Packages 可见性说明](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+
+发布工作流读取已推送的版本标签，构建并校验发行包，然后向 GHCR 发布两张 AMD64/ARM64 镜像。维护者可以在本地生成发行包与 Docker 归档。Docker 文件导出需要支持 Docker exporter 的 Buildx 构建器。
+
+```sh
+./scripts/build-release.sh v0.1.0
+docker buildx create --name meting-release --driver docker-container
+BUILDX_BUILDER=meting-release ./scripts/build-docker-release.sh v0.1.0
+```
