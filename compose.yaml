@@ -1,0 +1,46 @@
+services:
+  meting:
+    build:
+      context: .
+    environment:
+      LEGACY_URL: http://legacy:3000
+      LEGACY_BRIDGE_KEY: ${LEGACY_BRIDGE_KEY:?Set LEGACY_BRIDGE_KEY to a random 32-character or longer value}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+    depends_on:
+      legacy:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/readyz"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+
+  legacy:
+    build:
+      context: .
+      dockerfile: compat/Dockerfile
+    environment:
+      LEGACY_BRIDGE_KEY: ${LEGACY_BRIDGE_KEY:?Set LEGACY_BRIDGE_KEY to a random 32-character or longer value}
+      ADMIN_PATH: ${ADMIN_PATH:-admin}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      QISHUI_SIGNER_URL: ${QISHUI_SIGNER_URL:-}
+      LOUDNESS_SERVICE_URL: ${LOUDNESS_SERVICE_URL:-}
+      METING_COOKIE_ENCRYPTION_KEY: ${METING_COOKIE_ENCRYPTION_KEY:-}
+      METING_COOKIE_KEY_FILE: ${METING_COOKIE_KEY_FILE:-}
+      OVERSEAS: ${OVERSEAS:-}
+    user: "${LEGACY_UID:-1010}:${LEGACY_GID:-1010}"
+    volumes:
+      - "${LEGACY_DATA_DIR:-legacy-data}:/app/data"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+volumes:
+  legacy-data:
