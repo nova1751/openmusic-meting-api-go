@@ -74,9 +74,6 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 	if !midPattern.MatchString(req.ID) {
 		return music.Result{}, music.ErrInvalidID
 	}
-	if req.Cookie == "" {
-		return music.Result{}, music.ErrNoAccount
-	}
 	quality := music.NormalizeQuality(req.Quality)
 	start := slices.IndexFunc(audioQualities, func(q audioQuality) bool { return q.name == quality })
 	if start < 0 {

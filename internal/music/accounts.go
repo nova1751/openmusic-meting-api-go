@@ -83,7 +83,17 @@ func (p *AccountPool) play(ctx context.Context, req Request, provider Provider, 
 			eligible = append(eligible, index)
 		}
 	}
+	if len(eligible) == 0 && req.Platform == "tencent" {
+		for index, account := range accounts {
+			if account.Membership == Free {
+				eligible = append(eligible, index)
+			}
+		}
+	}
 	if len(eligible) == 0 {
+		if req.Platform == "tencent" {
+			return provider.Lookup(ctx, req)
+		}
 		return Result{}, ErrNoAccount
 	}
 	start := int((p.next.Add(1) - 1) % uint64(len(eligible)))

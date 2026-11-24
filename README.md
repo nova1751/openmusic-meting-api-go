@@ -11,7 +11,7 @@ A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting
 | NetEase tracks, playlists, albums, search, artists, radio, cover art, and plain or structured lyrics | Go | Go |
 | NetEase playback URLs and Personal FM | Go with local account configuration | Node.js with the existing account pool and supporting services |
 | Private NetEase room endpoints | Go | Node.js |
-| QQ Music tracks, playlists, search, covers, plain lyrics, and playback URLs | Go; playback requires an account | Node.js |
+| QQ Music tracks, playlists, search, covers, plain lyrics, and playback URLs | Go; availability depends on QQ Music | Node.js |
 | QQ Personal FM, Qishui Music, and Kugou Music | Requires compatibility mode | Node.js |
 | Original admin panel, four-provider QR login, and monitoring | Requires compatibility mode | Node.js |
 | Limited admin panel, NetEase QR login, 2FA, and encrypted backups | Optional, limited scope | Original admin panel |
@@ -101,8 +101,9 @@ For standalone playback and Personal FM, point `NETEASE_ACCOUNTS_FILE` to a JSON
 ]
 ```
 
-QQ accounts use the same array format through `TENCENT_ACCOUNTS_FILE`. QQ playback
-requires a valid account; challenge handling, device authentication, automatic
+QQ accounts use the same array format through `TENCENT_ACCOUNTS_FILE`. The service
+also attempts anonymous playback when no account is configured; availability is
+determined by QQ Music. Challenge handling, device authentication, automatic
 refresh and QQ QR login still require the compatibility service.
 
 | Environment variable | Default | Purpose |
