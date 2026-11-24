@@ -1,105 +1,124 @@
 # OpenMusic Meting API Go
 
-[OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) 的 Go 迁移版本，基于上游提交 [fb9030f](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb9030ff2b8ab295c213f8542807c1a95e6cf540)。Go 服务以 `/api` 为公共入口，支持原生网易云和四平台兼容部署。
+A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) with native NetEase Cloud Music support. The optional Node.js compatibility service retains the original admin panel and adds QQ Music, Qishui Music, and Kugou Music behind the same `/api` endpoint.
 
-| 功能 | 独立 Go | 兼容部署 |
+[简体中文](./README.zh-CN.md) · [Releases](https://github.com/nova1751/openmusic-meting-api-go/releases) · [Migration guide (Chinese)](./docs/MIGRATE_NODE_TO_GO.md)
+
+## Deployment modes
+
+| Feature | Standalone Go | Go + Node.js compatibility |
 | --- | --- | --- |
-| 网易云歌曲、歌单、搜索、歌手、电台、封面、普通和结构化歌词 | Go | Go |
-| 网易云播放地址和私人漫游 | Go，使用本地账号配置 | Node.js，使用原账号池和辅助服务 |
-| 网易云房间私有请求 | Go | Node.js |
-| QQ 音乐、汽水音乐、酷狗音乐 | 需要兼容部署 | Node.js |
-| 原管理后台、扫码、2FA、Cookie 校验、监测、备份 | 需要兼容部署 | Node.js |
-| OpenMusic 令牌及签名 | Go | Node.js 的现有令牌、授权开关与防重放存储 |
-| `/livez`、`/readyz` | Go | Go |
+| NetEase tracks, playlists, search, artists, radio, cover art, and plain or structured lyrics | Go | Go |
+| NetEase playback URLs and Personal FM | Go with local account configuration | Node.js with the existing account pool and supporting services |
+| Private NetEase room endpoints | Go | Node.js |
+| QQ Music, Qishui Music, and Kugou Music | Requires compatibility mode | Node.js |
+| Admin panel, QR-code login, 2FA, cookie validation, monitoring, and backups | Requires compatibility mode | Node.js |
+| OpenMusic token and request signing | Go | Uses the existing Node.js tokens, authorization settings, and replay protection |
+| Liveness and readiness endpoints | `/livez` and `/readyz` | `/livez` and `/readyz` |
 
-## 独立 Go
+## Quick start
 
-需要 Go 1.26 或更新版本。镜像和 CI 使用 Go 1.27.4。
+Building from source requires Go 1.26 or later. The container builds and CI use Go 1.27.4. The commands below use a POSIX shell and OpenSSL.
 
 ```sh
+git clone https://github.com/nova1751/openmusic-meting-api-go.git
+cd openmusic-meting-api-go
 export METING_API_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/meting
 ```
 
-默认监听 `127.0.0.1:3000`。`GET /livez` 和 `GET /readyz` 可直接访问。可用下面的完整签名请求搜索网易云歌曲。
+The service listens on `127.0.0.1:3000` by default. In another terminal, run `curl -fsS http://127.0.0.1:3000/readyz` to check readiness. Both health endpoints are available without a token.
+
+### Signed API request
+
+By default, `/api` requires a Bearer token and a signed OpenMusic assertion. In a terminal with the same `METING_API_TOKEN`, run this Python 3 example to search NetEase Cloud Music. Sign the exact path and query string sent on the wire.
 
 ```sh
 python3 - <<'PY'
-import base64, hashlib, hmac, json, os, secrets, time, urllib.request
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+import urllib.parse
+import urllib.request
 
 def b64url(value):
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 token = os.environ["METING_API_TOKEN"]
-target = "/api?server=netease&type=search&id=%E6%B5%B7%E9%98%94%E5%A4%A9%E7%A9%BA&limit=3"
-claims = {"v": 1, "sub": "openmusic:system", "purpose": "system",
-          "ts": int(time.time()), "nonce": b64url(secrets.token_bytes(18))}
+query = urllib.parse.urlencode({
+    "server": "netease", "type": "search", "id": "海阔天空", "limit": 3,
+})
+target = "/api?" + query
+claims = {
+    "v": 1, "sub": "openmusic:system", "purpose": "system",
+    "ts": int(time.time()), "nonce": b64url(secrets.token_bytes(18)),
+}
 assertion = b64url(json.dumps(claims, separators=(",", ":")).encode())
 payload = "\n".join([assertion, "GET", target, hashlib.sha256(b"").hexdigest()])
 signature = b64url(hmac.new(token.encode(), payload.encode(), hashlib.sha256).digest())
-req = urllib.request.Request("http://127.0.0.1:3000" + target, headers={
+request = urllib.request.Request("http://127.0.0.1:3000" + target, headers={
     "Authorization": "Bearer " + token,
     "X-OpenMusic-Assertion": assertion,
     "X-OpenMusic-Signature": signature,
 })
-with urllib.request.urlopen(req, timeout=50) as reply:
-    print(reply.read().decode())
+with urllib.request.urlopen(request, timeout=50) as response:
+    print(response.read().decode())
 PY
 ```
 
-播放和漫游可使用网易云账号配置文件。将配置保存在权限为 `0600` 的文件里，并通过 `NETEASE_ACCOUNTS_FILE` 指定它。会员档位由操作者填写，播放仍由平台校验实际权益。
+To check signing on your local service, set `target = "/test"` in the example. This endpoint returns `{"api":"/api","status":"ok"}` without contacting NetEase.
+
+Keep the token on the server. See the [OpenMusic authorization protocol](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb9030ff2b8ab295c213f8542807c1a95e6cf540/docs/OPENMUSIC_AUTH.md) for the signing and request rules, and the [implementation notes (Chinese)](./docs/IMPLEMENTATION.md) for response formats and compatibility details.
+
+### Configuration
+
+For standalone playback and Personal FM, point `NETEASE_ACCOUNTS_FILE` to a JSON file containing credentials for your NetEase accounts. On Unix, restrict the file to mode `0600`. Set `membership` to `free`, `vip`, or `svip` according to the account's actual tier. NetEase determines playback eligibility. At most one account can have `fmPriority` enabled.
 
 ```json
 [
-  {"cookie":"MUSIC_U=<账号凭证>","membership":"vip","fmPriority":true}
+  {"cookie": "MUSIC_U=<account credential>", "membership": "vip", "fmPriority": true}
 ]
 ```
 
-| 环境变量 | 默认值 | 说明 |
+| Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `3000` | 默认回环地址的端口 |
-| `LISTEN_ADDR` | `127.0.0.1:$PORT` | 完整监听地址。容器为 `:3000` |
-| `METING_API_TOKEN` | 必填 | 独立模式的 API Token，至少 32 个非空白字符 |
-| `OPENMUSIC_AUTH_ENABLED` | `true` | 独立模式的短期断言开关。关闭后仍校验 Bearer |
-| `NETEASE_ACCOUNTS_FILE` | 空 | 独立模式的账号 JSON，启动时载入 |
-| `PUBLIC_BASE_URL` | 当前服务地址 | 生成资源链接时使用的公开基址，可含子路径 |
-| `REQUEST_TIMEOUT` | `45s` | Go 路由整次请求的时限 |
-| `NETEASE_DJ_PAGE_DELAY_MS` | `400` | 网易云电台请求分页之间的毫秒数 |
-| `LEGACY_URL` | 空 | 使用兼容模式时的 Node.js 服务地址 |
-| `LEGACY_BRIDGE_KEY` | 空 | Go 与兼容服务共用的内部密钥 |
+| `PORT` | `3000` | Port used when `LISTEN_ADDR` is unset |
+| `LISTEN_ADDR` | `127.0.0.1:$PORT` | Full listen address. The container uses `:3000`. |
+| `METING_API_TOKEN` | Required in standalone mode | API token with at least 32 non-whitespace characters |
+| `OPENMUSIC_AUTH_ENABLED` | `true` | Require signed assertions in standalone mode. Bearer authentication still applies when set to `false`. |
+| `NETEASE_ACCOUNTS_FILE` | Unset | Standalone account JSON file loaded at startup |
+| `PUBLIC_BASE_URL` | Request origin | Public base URL used in generated resource links. It can include a path prefix. |
+| `REQUEST_TIMEOUT` | `45s` | Timeout for requests handled by Go |
+| `NETEASE_DJ_PAGE_DELAY_MS` | `400` | Delay in milliseconds between NetEase radio page requests |
+| `LEGACY_URL` | Unset | Private URL of the optional Node.js service |
+| `LEGACY_BRIDGE_KEY` | Unset | Shared internal key for the Go service and the Node.js bridge |
 
-## 兼容部署
+## Node.js compatibility deployment
+
+Copy `.env.example` to `.env`, set `LEGACY_BRIDGE_KEY` to a random value from `openssl rand -hex 32`, and set `ADMIN_PASSWORD` if you are starting with a new data directory.
 
 ```sh
 cp .env.example .env
-# 填写 LEGACY_BRIDGE_KEY。用 openssl rand -hex 32 生成。
-# 新数据目录还需填写 ADMIN_PASSWORD。
-docker compose up -d --build
+# Fill in .env before starting.
+docker compose up -d --build --wait
 curl -fsS http://127.0.0.1:3000/readyz
 ```
 
-Compose 只映射 Go 服务。后台默认入口为 `http://127.0.0.1:3000/admin`，原管理后台仍负责生成 API Token、维护 Cookie 和配置授权。相同容器网络内可使用 `http://meting:3000` 访问 Go 服务。
+Compose exposes the Go service at `127.0.0.1:3000`. The original admin panel is available at `http://127.0.0.1:3000/admin` by default and still manages tokens, cookies, and authorization settings. Other containers on the same Compose network can use `http://meting:3000`.
 
-既有部署请参阅 [从 Node.js 迁移到 Go](docs/MIGRATE_NODE_TO_GO.md)，按备份、并行验证、切流和回滚顺序操作。
+For an existing deployment, follow the backup, parallel verification, cutover, and rollback steps in the [migration guide (Chinese)](./docs/MIGRATE_NODE_TO_GO.md).
 
-若已有可访问的原版 Node.js 服务，只配置 `LEGACY_URL` 也能启动普通反向代理。要启用网易云原生分流，Node.js 需运行随仓库提供的 `compat/bridge.mjs`，并在两个进程配置相同的 `LEGACY_BRIDGE_KEY`。兼容进程应位于 Go 服务可访问的私有网络。
+If you already run the upstream Node.js service, setting only `LEGACY_URL` enables a reverse proxy. To route supported public NetEase requests through Go, run `compat/bridge.mjs` on the Node.js service and set the same `LEGACY_BRIDGE_KEY` on both services. Keep Node.js on a private network reachable by Go.
 
-## 验证
+## Release binaries and container images
 
-```sh
-go vet ./...
-go test -race ./...
-go build -o bin/meting ./cmd/meting
-node --check compat/bridge.mjs
-```
+[GitHub Releases](https://github.com/nova1751/openmusic-meting-api-go/releases) provides AMD64 and ARM64 binaries for Linux, macOS, and Windows. Download the archive and `SHA256SUMS` into the same directory and run `sha256sum -c --ignore-missing SHA256SUMS` where GNU coreutils is available. Run `meting --version` after extraction to check the version.
 
-[详细实现和兼容差异](docs/IMPLEMENTATION.md) · [上游 OpenMusic 授权协议](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb9030ff2b8ab295c213f8542807c1a95e6cf540/docs/OPENMUSIC_AUTH.md)
-
-## 预编译发行包与镜像
-
-GitHub Release 的压缩包对应 Linux、macOS 和 Windows 的 AMD64、ARM64 架构。下载所需架构的压缩包与校验文件后，运行 `sha256sum -c --ignore-missing SHA256SUMS`，也可执行 `meting --version` 确认版本。Release 还包含 Linux AMD64 与 ARM64 的 Go 容器归档，用 `docker load -i <归档文件>` 导入。归档的校验值在 `SHA256SUMS.docker` 中。 [GitHub Releases](https://github.com/nova1751/openmusic-meting-api-go/releases)
-
-两张发布镜像分别用于 Go 服务和兼容子服务。要部署一组已发布的同版本镜像，先按上节配置 `.env`，然后设置版本并运行以下命令。
+Releases also include Go container archives for Linux AMD64 and ARM64. Verify them against `SHA256SUMS.docker` and import your archive with `docker load -i <archive>`. To deploy the matching Go and Node.js images from GHCR, configure `.env` as above and set the release version.
 
 ```sh
 export METING_VERSION=v0.1.0
@@ -107,12 +126,29 @@ docker compose -f compose.yaml -f compose.release.yaml pull
 docker compose -f compose.yaml -f compose.release.yaml up -d --no-build --wait
 ```
 
-GHCR 的新容器包默认是私有的。要支持匿名拉取，仓库维护者需在两个容器包的 Package settings 中把可见性设为 Public。公开发行页上的容器归档可直接下载并导入。 [GitHub Packages 可见性说明](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+If the GHCR packages are private, authenticate before pulling. Public packages support anonymous pulls. See [GitHub Packages visibility and access](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
 
-发布工作流读取已推送的版本标签，构建并校验发行包，然后向 GHCR 发布两张 AMD64/ARM64 镜像。维护者可以在本地生成发行包与 Docker 归档。Docker 文件导出需要支持 Docker exporter 的 Buildx 构建器。
+## Development
+
+```sh
+go vet ./...
+go test -race ./...
+go build ./cmd/meting
+node --check compat/bridge.mjs
+```
+
+The release workflow builds and verifies archives from version tags and publishes both Linux container images. To build the release archives locally, use a Buildx builder that supports the Docker exporter.
 
 ```sh
 ./scripts/build-release.sh v0.1.0
 docker buildx create --name meting-release --driver docker-container
 BUILDX_BUILDER=meting-release ./scripts/build-docker-release.sh v0.1.0
 ```
+
+## Credits
+
+The Go port is maintained by [nova1751](https://github.com/nova1751). It follows the API contract and selected NetEase request formats from [OpenMusic-Meting-API at `fb9030f`](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb9030ff2b8ab295c213f8542807c1a95e6cf540). The upstream package credits xizeyoupan as its author and declares MIT. This is an independent community project with no affiliation with the upstream project or the supported music services. See [NOTICE.md](./NOTICE.md) for upstream and third-party attribution.
+
+## License
+
+The Go implementation is licensed under [MIT](./LICENSE). The optional Node.js compatibility image includes the upstream Folia-derived QRC implementation, which retains its [AGPL-3.0 license and attribution](./NOTICE.md).
