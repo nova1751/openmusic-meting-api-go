@@ -1,0 +1,122 @@
+# 从 Node.js 迁移到 Go
+
+原版 Node.js 部署支持完整的四个平台和管理后台。使用既有数据的迁移请选择兼容部署。Go 接管公共入口及网易云只读查询，Node.js 子服务继续使用原账号池与持久化格式。若仅需要网易云和单个可执行文件，也可部署独立 Go 模式。
+
+| 部署方式 | 现有数据 | 可用能力 |
+| --- | --- | --- |
+| 兼容部署 | 直接挂载旧 `DATA_DIR` 的完整副本，沿用 Cookie、Token、后台用户和配置 | 四平台、后台、监测、备份、扫码、汽水音频代理 |
+| 独立 Go | 配置一个 API Token，按需建立网易云账号 JSON | 网易云曲目、歌单、搜索、电台、歌词、播放、漫游和房间私有接口 |
+
+## 迁移四平台部署
+
+### 1. 记录旧配置并构建镜像
+
+记录正在运行的 Node.js 版本、镜像标签或提交、`DATA_DIR`、调用地址和监听端口，并保留旧启动配置。Node.js 从工作目录中的 `./data` 读取默认数据，原版 Docker 的默认容器路径为 `/app/data`。如果已有 Docker 容器，可用下面的命令查看挂载。
+
+```sh
+docker inspect --format '{{range .Mounts}}{{println .Type .Name .Source .Destination}}{{end}}' openmusic-meting-api
+```
+
+在 Go 仓库中创建 `.env`。文件权限应允许当前部署用户读写，内部桥接密钥可用 `openssl rand -hex 32` 生成。尝试迁移时先用独立端口。下面的配置以 Linux 宿主机为例。
+
+```dotenv
+PORT=3001
+LEGACY_DATA_DIR=/opt/openmusic-meting-go/data-stage
+LEGACY_BRIDGE_KEY=<随机密钥>
+LEGACY_UID=1010
+LEGACY_GID=1010
+```
+
+若旧版通过 `METING_COOKIE_ENCRYPTION_KEY` 注入密钥，保留同一密钥。若使用 `METING_COOKIE_KEY_FILE`，备份该文件并将副本放进迁移数据目录，使用容器内路径，例如 `/app/data/keys/cookie.key`。保留仅在旧环境变量中设置的 `QISHUI_SIGNER_URL`、`LOUDNESS_SERVICE_URL`、`OVERSEAS` 和 `ADMIN_PATH`。已保存在后台的设置从数据目录载入。旧环境使用 `localhost` 访问的辅助服务，需要改成兼容容器可访问的 DNS 名或地址。
+
+使用源码构建时，先在停机窗口前拉取并构建两张镜像。
+
+```sh
+docker compose build
+```
+
+使用已发布的镜像时，按 README 的发行说明加载 `compose.release.yaml`，设置目标 `METING_VERSION` 并提前拉取两张镜像。
+
+### 2. 停止旧进程并备份完整数据
+
+用原有的服务管理方式停止旧实例。Docker 可用 `docker stop openmusic-meting-api`，systemd 可用原服务单元的 `systemctl stop`。操作前记下原启动命令或 Compose 服务名。
+
+对于宿主机目录或 bind mount，从旧数据目录生成备份，再复制到专用的迁移目录。
+
+```sh
+old_data=/opt/meting-api/data
+backup_dir="$(sudo mktemp -d /var/tmp/openmusic-meting-backup.XXXXXXXX)"
+stage_dir=/opt/openmusic-meting-go/data-stage
+
+sudo cp -a "$old_data/." "$backup_dir/"
+sudo install -d -m 0700 "$stage_dir"
+sudo cp -a "$backup_dir/." "$stage_dir/"
+sudo chown -R 1010:1010 "$stage_dir"
+```
+
+将路径与 UID/GID 换成实际值。只对本次建立的数据副本调整所有权。使用 Docker 命名卷时，也可以从已停止但保留的旧容器中导出。将容器名和容器内的数据路径换成实际值。
+
+```sh
+backup_dir="$(mktemp -d /var/tmp/openmusic-meting-backup.XXXXXXXX)"
+stage_dir=/opt/openmusic-meting-go/data-stage
+docker cp "openmusic-meting-api:/app/data/." "$backup_dir/"
+sudo install -d -m 0700 "$stage_dir"
+sudo cp -a "$backup_dir/." "$stage_dir/"
+sudo chown -R 1010:1010 "$stage_dir"
+```
+
+备份需包含整个数据目录和实际的 Cookie 加密密钥。旧版目录可能包含 `cookies.json`、`api_tokens.json`、`users.json`、`config.json`、`security.json`、日志和日常备份。把外置密钥、旧配置和备份一起保存在受限位置。
+
+如果需要恢复旧服务以缩短停机，可以在备份完成后先启动它，同时让兼容部署只使用独立的数据副本和测试端口。最终切换前再停旧服务，做一次最新快照，并将兼容部署切换到该副本。
+
+### 3. 启动兼容部署并验收
+
+```sh
+docker compose up -d --wait
+docker compose ps
+curl -fsS http://127.0.0.1:3001/readyz
+```
+
+1. 访问原管理页面路径。检查原管理员和 2FA、四平台 Cookie、FM 优先账号、监测设置及已有 API Token。在复制的数据上手工验证时，按需重新登录后台。
+2. 将 OpenMusic 的测试连接指向 Go 入口，沿用原 API Token。发起一次签名搜索、单曲查询与取链。兼容模式使用 Node.js 的授权开关，重新签名后的请求应可通过，重放原签名应得到 `401 OPENMUSIC_REPLAY`。如果只手动测试，可使用项目 README 的签名示例，并把目标端口改成本次测试端口。
+3. 按启用的平台测试查歌、歌词、会员取链和 FM。汽水部署另测签名服务与带 `Range` 的音频请求。房间私有账号也应单独验证。
+4. 使用反向代理时，检查响应里的播放、歌词和封面地址。若客户端依赖特定域名或前缀，设置 `PUBLIC_BASE_URL`。验签使用服务收到的路径和查询字符串，网关与 OpenMusic 需使用一致的编码和路径。避免代理改写参与签名的查询串。
+
+若 OpenMusic 在另一个容器网络中，连接该网络的应是 Go 服务。可在部署侧添加 Compose override，下面的 Compose override 会将 `meting` 加入现有的外部网络。
+
+```yaml
+services:
+  meting:
+    networks: [default, openmusic]
+networks:
+  openmusic:
+    external: true
+    name: openmusic_default
+```
+
+同网络中的 OpenMusic 可以使用 `http://meting:3000`，宿主机反向代理则使用发布的回环端口。
+
+### 4. 切流和回滚
+
+切换时停止旧实例。若试跑期间旧实例继续提供服务，应备份最新状态，并用新的数据副本启动兼容部署。切换反代目标或 OpenMusic 的服务地址。若复用旧宿主机端口，把 `.env` 中的 `PORT` 改为旧值，再执行 `docker compose up -d --wait`。以实际生产地址复测签名搜索、取链、后台以及已接入的媒体功能。
+
+出现故障时，停止兼容部署，把流量切回旧 Node.js 服务，使用原配置、密钥和原数据目录或切换前备份。若切换后修改过账号、Token 或后台设置，先保存兼容实例的新数据副本，再决定需要带回旧实例的变更。每份可写数据目录在同一时刻由一个 Node.js 进程使用。回滚后重跑签名和播放验收。
+
+## 迁移到独立 Go
+
+独立 Go 只提供网易云。它通过环境变量和账号 JSON 配置，旧版 Node.js 的加密 Cookie、管理员数据和监测由兼容部署承接。
+
+1. 下载与系统架构对应的发行包，并比对发行页的 `SHA256SUMS`。从源码构建可运行 `CGO_ENABLED=0 go build -trimpath -o bin/meting ./cmd/meting`。
+2. 给 `METING_API_TOKEN` 配置一个仍安全的原 OpenMusic Token，或者生成新 Token，并同步更新 OpenMusic 服务端。默认启用短期断言。公网访问请通过受控的反向代理或私有网络。
+3. 需要账号时，从可信的授权来源取得有效网易云 Cookie，按 README 格式写入 `NETEASE_ACCOUNTS_FILE`。填写对应的 `free`、`vip` 或 `svip` 权益，按需指定一个 FM 优先账号。为账号文件和含 Token 的部署配置设置最小读取权限。
+4. 先在额外端口以原客户端验证，再切换流量。配置可以放进现有服务管理器的受限环境文件。例如保留签名，并设置 `LISTEN_ADDR=127.0.0.1:3001`，随后运行 `./meting`。用 `/readyz` 探活，并测试真实账号的播放和 FM。
+
+## 常见问题
+
+| 表现 | 检查 |
+| --- | --- |
+| 兼容子服务无法启动或提示初始化管理员 | 检查挂载是否指向包含 `users.json` 的实际旧数据目录，并检查容器 UID/GID 的读写权限 |
+| 后台能登录，Cookie 解密失败 | 核对外置密钥、`cookie-encryption.key`、容器内密钥路径和容器用户读取权限 |
+| 原 Token 收到 401 | 核对数据目录、授权开关、签名路径、原始查询串和两端时钟 |
+| 搜索成功，播放返回 503 | 检查已启用账号的会员资格和目标音质。独立 Go 从账号 JSON 读取权益 |
+| 汽水播放或响度服务失效 | 核对保存的服务地址和兼容容器的网络及 DNS |

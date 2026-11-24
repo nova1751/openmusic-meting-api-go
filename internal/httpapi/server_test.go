@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/auth"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/legacy"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/auth"
+	"github.com/nova1751/openmusic-meting-api-go/internal/legacy"
+	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 )
 
 const testToken = "any-test-token-at-least-32-characters"

@@ -1,0 +1,5 @@
+services:
+  meting:
+    image: ghcr.io/nova1751/openmusic-meting-api-go:${METING_VERSION:?Set METING_VERSION to a release tag}
+  legacy:
+    image: ghcr.io/nova1751/openmusic-meting-api-go-legacy:${METING_VERSION:?Set METING_VERSION to a release tag}

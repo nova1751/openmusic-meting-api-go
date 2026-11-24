@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,15 +13,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/auth"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/config"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/httpapi"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/legacy"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/music"
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/netease"
+	"github.com/nova1751/openmusic-meting-api-go/internal/auth"
+	"github.com/nova1751/openmusic-meting-api-go/internal/config"
+	"github.com/nova1751/openmusic-meting-api-go/internal/httpapi"
+	"github.com/nova1751/openmusic-meting-api-go/internal/legacy"
+	"github.com/nova1751/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/netease"
 )
 
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the Meting version")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -59,7 +68,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	logger.Info("server listening", "address", listener.Addr().String(), "mode", mode)
+	logger.Info("server listening", "address", listener.Addr().String(), "mode", mode, "version", version)
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
 	select {

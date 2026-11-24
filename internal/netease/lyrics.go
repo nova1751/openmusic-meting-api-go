@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/qq01-hub/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 )
 
 const lyricsLimit = 1 << 20
