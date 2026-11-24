@@ -1,6 +1,6 @@
 # OpenMusic Meting API Go
 
-A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) with native NetEase Cloud Music support. The optional Node.js compatibility service retains the original admin panel and adds QQ Music, Qishui Music, and Kugou Music behind the same `/api` endpoint.
+A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) with native NetEase and selected QQ Music functionality. The optional Node.js compatibility service retains the original admin panel and four-provider support.
 
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/nova1751/openmusic-meting-api-go/releases) · [Migration guide (Chinese)](./docs/MIGRATE_NODE_TO_GO.md)
 
@@ -8,11 +8,13 @@ A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting
 
 | Feature | Standalone Go | Go + Node.js compatibility |
 | --- | --- | --- |
-| NetEase tracks, playlists, search, artists, radio, cover art, and plain or structured lyrics | Go | Go |
+| NetEase tracks, playlists, albums, search, artists, radio, cover art, and plain or structured lyrics | Go | Go |
 | NetEase playback URLs and Personal FM | Go with local account configuration | Node.js with the existing account pool and supporting services |
 | Private NetEase room endpoints | Go | Node.js |
-| QQ Music, Qishui Music, and Kugou Music | Requires compatibility mode | Node.js |
-| Admin panel, QR-code login, 2FA, cookie validation, monitoring, and backups | Requires compatibility mode | Node.js |
+| QQ Music tracks, playlists, search, covers, plain lyrics, and playback URLs | Go; playback requires an account | Node.js |
+| QQ Personal FM, Qishui Music, and Kugou Music | Requires compatibility mode | Node.js |
+| Original admin panel, four-provider QR login, and monitoring | Requires compatibility mode | Node.js |
+| Limited admin panel, NetEase QR login, 2FA, and encrypted backups | Optional, limited scope | Original admin panel |
 | OpenMusic token and request signing | Go | Uses the existing Node.js tokens, authorization settings, and replay protection |
 | Liveness and readiness endpoints | `/livez` and `/readyz` | `/livez` and `/readyz` |
 
@@ -99,18 +101,49 @@ For standalone playback and Personal FM, point `NETEASE_ACCOUNTS_FILE` to a JSON
 ]
 ```
 
+QQ accounts use the same array format through `TENCENT_ACCOUNTS_FILE`. QQ playback
+requires a valid account; challenge handling, device authentication, automatic
+refresh and QQ QR login still require the compatibility service.
+
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port used when `LISTEN_ADDR` is unset |
 | `LISTEN_ADDR` | `127.0.0.1:$PORT` | Full listen address. The container uses `:3000`. |
-| `METING_API_TOKEN` | Required in standalone mode | API token with at least 32 non-whitespace characters |
+| `METING_API_TOKEN` | Required in standalone mode, or import a named token | API token with at least 32 non-whitespace characters |
 | `OPENMUSIC_AUTH_ENABLED` | `true` | Require signed assertions in standalone mode. Bearer authentication still applies when set to `false`. |
 | `NETEASE_ACCOUNTS_FILE` | Unset | Standalone account JSON file loaded at startup |
+| `TENCENT_ACCOUNTS_FILE` | Unset | Standalone QQ account JSON file loaded at startup |
+| `METING_NODE_DATA_DIR` | Unset | Read existing encrypted Node accounts; mutually exclusive with standalone account files |
+| `METING_COOKIE_KEY_FILE` | Key inside Node data directory | Existing cookie encryption key file |
+| `METING_COOKIE_ENCRYPTION_KEY` | Unset | Existing environment-provided key; takes precedence over the key file |
+| `METING_NODE_TOKEN_NAME` | Unset | When no API token is set, import a named Node token; revocation fails closed |
+| `METING_NATIVE_ADMIN` | `false` | Enable the limited native admin; API listener must be loopback-only |
+| `METING_SITE_GATEWAY_CONFIG` | Unset | Optional website gateway JSON configuration file |
+| `METING_SITE_GATEWAY_ADDR` | `127.0.0.1:3358` | Loopback-only website gateway listener |
+| `MUSIC_ORIGIN_SECRET` | Unset | Shared key for the website gateway and trusted edge proxy; at least 32 bytes |
 | `PUBLIC_BASE_URL` | Request origin | Public base URL used in generated resource links. It can include a path prefix. |
 | `REQUEST_TIMEOUT` | `45s` | Timeout for requests handled by Go |
 | `NETEASE_DJ_PAGE_DELAY_MS` | `400` | Delay in milliseconds between NetEase radio page requests |
 | `LEGACY_URL` | Unset | Private URL of the optional Node.js service |
 | `LEGACY_BRIDGE_KEY` | Unset | Shared internal key for the Go service and the Node.js bridge |
+
+Native admin requires an HTTPS `PUBLIC_BASE_URL`, a copy of the old data directory,
+and an existing administrator. It supports NetEase QR login, account activation,
+and 2FA, but not QQ QR login, user management, or monitoring.
+Its first successful login creates a restricted, stronger password-hash file while
+retaining the old file for rollback. Native password changes do not change the
+old Node password. Never let Node and native admin write the same
+data directory concurrently.
+
+The native admin honors the old backup setting, snapshots at startup, account
+changes and local midnight, and retains seven restricted snapshots in
+`go-native-backups`. Back up the environment separately if the cookie key is
+provided through an environment variable.
+
+The optional website gateway restricts collections and media IDs and checks its
+shared key and Origin. An edge rate limit remains necessary; Origin can be forged
+outside browsers and public playback links can be copied. See the
+[migration guide](./docs/MIGRATE_NODE_TO_GO.md).
 
 ## Node.js compatibility deployment
 

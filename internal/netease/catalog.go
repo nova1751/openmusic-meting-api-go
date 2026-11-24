@@ -133,6 +133,19 @@ func (c *Client) Lookup(ctx context.Context, req music.Request) (music.Result, e
 		return items(songs), nil
 	case "playlist":
 		return c.playlist(ctx, req)
+	case "album":
+		ids, err := parseIDs(req.ID)
+		if err != nil || len(ids) != 1 {
+			return music.Result{}, music.ErrInvalidID
+		}
+		var reply struct{ Songs []song }
+		if err := c.request(ctx, webAPI("/api/v1/album/"+string(ids[0])), req.Cookie, parameters{}, &reply); err != nil {
+			return music.Result{}, err
+		}
+		if reply.Songs == nil {
+			return music.Result{}, errors.New("netease album missing songs")
+		}
+		return items(reply.Songs), nil
 	case "search", "search_playlist", "search_dj":
 		return c.search(ctx, req)
 	case "artist":

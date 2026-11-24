@@ -24,37 +24,62 @@ type Account struct {
 }
 
 type AccountPool struct {
-	accounts []Account
-	next     atomic.Uint64
-	mu       sync.Mutex
-	cooldown map[int]time.Time
+	accounts   []Account
+	next       atomic.Uint64
+	mu         sync.Mutex
+	cooldown   map[int]time.Time
+	loader     func() ([]Account, error)
+	generation uint64
 }
 
 func NewAccountPool(accounts []Account) *AccountPool {
 	return &AccountPool{accounts: slices.Clone(accounts), cooldown: make(map[int]time.Time)}
 }
 
+// SetLoader enables read-only refresh of externally managed accounts.
+func (p *AccountPool) SetLoader(loader func() ([]Account, error)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.loader = loader
+}
+
 func (p *AccountPool) Lookup(ctx context.Context, req Request, provider Provider) (Result, error) {
 	if req.Cookie != "" {
 		return provider.Lookup(ctx, req)
 	}
+	p.mu.Lock()
+	if p.loader != nil {
+		accounts, err := p.loader()
+		if err != nil {
+			p.mu.Unlock()
+			return Result{}, err
+		}
+		if !slices.Equal(accounts, p.accounts) {
+			p.accounts = slices.Clone(accounts)
+			p.cooldown = make(map[int]time.Time)
+			p.generation++
+		}
+	}
+	accounts := slices.Clone(p.accounts)
+	generation := p.generation
+	p.mu.Unlock()
 	switch req.Type {
 	case "url":
-		return p.play(ctx, req, provider)
+		return p.play(ctx, req, provider, accounts)
 	case "fm":
-		return p.fm(ctx, req, provider)
+		return p.fm(ctx, req, provider, accounts, generation)
 	}
-	if len(p.accounts) > 0 {
-		req.Cookie = p.accounts[0].Cookie
+	if len(accounts) > 0 {
+		req.Cookie = accounts[0].Cookie
 	}
 	return provider.Lookup(ctx, req)
 }
 
-func (p *AccountPool) play(ctx context.Context, req Request, provider Provider) (Result, error) {
+func (p *AccountPool) play(ctx context.Context, req Request, provider Provider, accounts []Account) (Result, error) {
 	var eligible []int
-	for index, account := range p.accounts {
+	for index, account := range accounts {
 		if account.Membership == SVIP ||
-			(account.Membership == VIP && RequiredMembership(req.Quality) != SVIP) {
+			(account.Membership == VIP && RequiredMembershipForPlatform(req.Platform, req.Quality) != SVIP) {
 			eligible = append(eligible, index)
 		}
 	}
@@ -66,14 +91,14 @@ func (p *AccountPool) play(ctx context.Context, req Request, provider Provider) 
 	ordered = append(ordered, eligible[start:]...)
 	ordered = append(ordered, eligible[:start]...)
 	if req.FM {
-		if pos := slices.IndexFunc(ordered, func(index int) bool { return p.accounts[index].FMPriority }); pos >= 0 {
+		if pos := slices.IndexFunc(ordered, func(index int) bool { return accounts[index].FMPriority }); pos >= 0 {
 			ordered[0], ordered[pos] = ordered[pos], ordered[0]
 		}
 	}
 	var failed error
 	var miss bool
 	for _, index := range ordered[:min(4, len(ordered))] {
-		req.Cookie = p.accounts[index].Cookie
+		req.Cookie = accounts[index].Cookie
 		result, err := provider.Lookup(ctx, req)
 		switch {
 		case err == nil && result.Link.URL != "":
@@ -99,11 +124,11 @@ func (p *AccountPool) play(ctx context.Context, req Request, provider Provider) 
 	return Result{}, failed
 }
 
-func (p *AccountPool) fm(ctx context.Context, req Request, provider Provider) (Result, error) {
+func (p *AccountPool) fm(ctx context.Context, req Request, provider Provider, accounts []Account, generation uint64) (Result, error) {
 	now := time.Now()
 	p.mu.Lock()
 	var ordered []int
-	for index, account := range p.accounts {
+	for index, account := range accounts {
 		if p.cooldown[index].After(now) {
 			continue
 		}
@@ -120,7 +145,7 @@ func (p *AccountPool) fm(ctx context.Context, req Request, provider Provider) (R
 	var failed error
 	var empty bool
 	for attempt, index := range ordered {
-		account := p.accounts[index]
+		account := accounts[index]
 		if attempt > 0 && account.Membership != VIP && account.Membership != SVIP {
 			continue
 		}
@@ -128,7 +153,9 @@ func (p *AccountPool) fm(ctx context.Context, req Request, provider Provider) (R
 		result, err := provider.Lookup(ctx, req)
 		if err == nil && len(result.Items) > 0 {
 			p.mu.Lock()
-			delete(p.cooldown, index)
+			if generation == p.generation {
+				delete(p.cooldown, index)
+			}
 			p.mu.Unlock()
 			return result, nil
 		}
@@ -136,7 +163,9 @@ func (p *AccountPool) fm(ctx context.Context, req Request, provider Provider) (R
 			return Result{}, ctx.Err()
 		}
 		p.mu.Lock()
-		p.cooldown[index] = time.Now().Add(30 * time.Second)
+		if generation == p.generation {
+			p.cooldown[index] = time.Now().Add(30 * time.Second)
+		}
 		p.mu.Unlock()
 		if err == nil {
 			empty = true

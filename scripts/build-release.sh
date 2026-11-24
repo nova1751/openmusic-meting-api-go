@@ -27,9 +27,9 @@ for os in linux darwin windows; do
         CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
             -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$version" \
             -o "$stage/$executable" ./cmd/meting
-        cp LICENSE NOTICE.md README.md "$stage/"
+        cp LICENSE NOTICE.md README.md README.zh-CN.md "$stage/"
         mkdir -p -- "$stage/docs"
-        cp docs/IMPLEMENTATION.md docs/MIGRATE_NODE_TO_GO.md "$stage/docs/"
+        cp docs/IMPLEMENTATION.md docs/MIGRATE_NODE_TO_GO.md docs/site-gateway.example.json "$stage/docs/"
         if [[ "$os" == windows ]]; then
             (cd -- "$build_dir" && zip -qr "$output_dir/$name.zip" "$name")
             assets+=("$name.zip")

@@ -1,0 +1,9 @@
+{
+  "publicBase": "https://music.example.com",
+  "origins": ["https://example.com", "https://blog.example.com"],
+  "collections": [
+    {"server": "netease", "type": "playlist", "id": "123456"},
+    {"server": "netease", "type": "album", "id": "123456"},
+    {"server": "tencent", "type": "playlist", "id": "123456"}
+  ]
+}

@@ -4,7 +4,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -15,6 +15,7 @@ FROM alpine:3.22 AS runtime
 LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/meting /usr/local/bin/meting
+COPY LICENSE NOTICE.md /usr/share/doc/openmusic-meting/
 USER 65532:65532
 ENV LISTEN_ADDR=:3000
 EXPOSE 3000

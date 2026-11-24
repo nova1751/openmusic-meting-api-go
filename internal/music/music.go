@@ -44,6 +44,7 @@ type Item struct {
 	Lyric      json.RawMessage `json:"lrc,omitempty"`
 	Duration   int64           `json:"duration,omitempty"`
 	TrackCount *int            `json:"trackCount,omitempty"`
+	SongMID    string          `json:"songmid,omitempty"`
 }
 
 type Link struct {

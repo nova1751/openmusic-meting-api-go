@@ -1,6 +1,6 @@
 # OpenMusic Meting API Go
 
-[OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) 的 Go 移植版，原生支持网易云音乐。可选的 Node.js 兼容服务保留原版管理后台，并通过同一个 `/api` 入口支持 QQ 音乐、汽水音乐和酷狗音乐。
+[OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) 的 Go 移植版，原生支持网易云及部分 QQ 音乐功能。可选的 Node.js 兼容服务保留原版管理后台及四平台功能。
 
 [English](./README.md) · [发行版本](https://github.com/nova1751/openmusic-meting-api-go/releases) · [迁移指南](./docs/MIGRATE_NODE_TO_GO.md)
 
@@ -8,11 +8,13 @@
 
 | 功能 | 独立 Go | Go + Node.js 兼容部署 |
 | --- | --- | --- |
-| 网易云歌曲、歌单、搜索、歌手、电台、封面、普通及结构化歌词 | Go | Go |
+| 网易云歌曲、歌单、专辑、搜索、歌手、电台、封面、普通及结构化歌词 | Go | Go |
 | 网易云播放地址和私人漫游 | Go，使用本地账号配置 | Node.js，使用现有账号池和辅助服务 |
 | 网易云房间私有接口 | Go | Node.js |
-| QQ 音乐、汽水音乐、酷狗音乐 | 需要兼容部署 | Node.js |
-| 管理后台、扫码登录、双重验证、Cookie 校验、监控和备份 | 需要兼容部署 | Node.js |
+| QQ 音乐歌曲、歌单、搜索、封面、普通歌词及取链 | Go，取链需要账号 | Node.js |
+| QQ 音乐私人漫游、汽水音乐、酷狗音乐 | 需要兼容部署 | Node.js |
+| 原管理后台、四平台扫码、监控 | 需要兼容部署 | Node.js |
+| 精简管理页、网易云扫码、双重验证、加密备份 | 可选；功能范围较小 | 原版后台 |
 | OpenMusic 令牌和请求签名 | Go | 使用 Node.js 的现有令牌、授权设置和防重放机制 |
 | 存活与就绪检查 | `/livez` 和 `/readyz` | `/livez` 和 `/readyz` |
 
@@ -99,18 +101,45 @@ PY
 ]
 ```
 
+QQ 账号可用同样的数组格式通过 `TENCENT_ACCOUNTS_FILE` 配置。QQ 取链需要有效账号；
+账号挑战处理、设备认证、自动刷新和 QQ 扫码仍需要兼容服务。
+
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `PORT` | `3000` | 未设置 `LISTEN_ADDR` 时使用的端口 |
 | `LISTEN_ADDR` | `127.0.0.1:$PORT` | 完整监听地址。容器内使用 `:3000`。 |
-| `METING_API_TOKEN` | 独立模式必填 | 至少 32 个非空白字符的 API 令牌 |
+| `METING_API_TOKEN` | 独立模式必填，或使用旧令牌 | 至少 32 个非空白字符的 API 令牌 |
 | `OPENMUSIC_AUTH_ENABLED` | `true` | 独立模式是否要求签名断言。设为 `false` 后仍校验 Bearer 令牌。 |
 | `NETEASE_ACCOUNTS_FILE` | 未设置 | 独立模式启动时加载的账号 JSON 文件 |
+| `TENCENT_ACCOUNTS_FILE` | 未设置 | 独立模式启动时加载的 QQ 账号 JSON 文件 |
+| `METING_NODE_DATA_DIR` | 未设置 | 只读加载旧 Node 数据目录中的加密账号；不能与独立账号文件同时使用 |
+| `METING_COOKIE_KEY_FILE` | 旧数据目录内的密钥文件 | 旧版 Cookie 加密密钥路径 |
+| `METING_COOKIE_ENCRYPTION_KEY` | 未设置 | 旧版使用的环境变量密钥；优先于密钥文件 |
+| `METING_NODE_TOKEN_NAME` | 未设置 | 未设置 `METING_API_TOKEN` 时读取指定名称的旧 Token；撤销后请求立即失败 |
+| `METING_NATIVE_ADMIN` | `false` | 启用精简网易云管理页；API 必须只监听回环地址 |
+| `METING_SITE_GATEWAY_CONFIG` | 未设置 | 可选的网站网关 JSON 配置文件 |
+| `METING_SITE_GATEWAY_ADDR` | `127.0.0.1:3358` | 网站网关监听地址；只允许回环地址 |
+| `MUSIC_ORIGIN_SECRET` | 未设置 | 网站网关与可信边缘代理共享的密钥，至少 32 字节 |
 | `PUBLIC_BASE_URL` | 当前请求的协议和主机 | 生成资源链接时使用的公开基址，可包含子路径。 |
 | `REQUEST_TIMEOUT` | `45s` | Go 处理请求的总时限 |
 | `NETEASE_DJ_PAGE_DELAY_MS` | `400` | 网易云电台分页请求之间的间隔，单位为毫秒 |
 | `LEGACY_URL` | 未设置 | 可选 Node.js 服务的内网地址 |
 | `LEGACY_BRIDGE_KEY` | 未设置 | Go 服务与 Node.js 桥接服务共用的内部密钥 |
+
+`METING_NATIVE_ADMIN=true` 要求 `PUBLIC_BASE_URL` 指向管理页 HTTPS 源站，
+`METING_NODE_DATA_DIR` 指向旧数据副本，并沿用原管理员登录。原生管理页支持
+网易云扫码、账号启停和双重验证，但不包含原后台的 QQ 扫码、
+多用户管理和监控配置。首次登录会创建受限权限的强哈希文件；
+旧密码文件保留以便回滚；在原生页面修改密码不会修改旧版密码。原生管理页启用时，
+旧 Node 进程不能同时写入同一数据目录。
+
+原生管理页遵循旧数据中的备份开关：启动时、账号状态变更后和本地每天零点创建
+受限权限快照，最近 7 份保存在 `go-native-backups`。如果 Cookie 密钥通过
+环境变量注入，必须单独安全备份环境配置。
+
+网站网关仅允许配置中的歌单、专辑和相应媒体 ID，并校验来源密钥及 Origin。
+仍需在边缘代理实施限流；Origin 可被非浏览器客户端伪造，公开播放链接也可能
+被复制。配置与安全边界见 [迁移指南](./docs/MIGRATE_NODE_TO_GO.md)。
 
 ## Node.js 兼容部署
 

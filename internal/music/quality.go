@@ -18,7 +18,7 @@ func Supports(platform, operation string) bool {
 	switch operation {
 	case "song", "playlist", "search", "search_playlist", "fm", "url", "lrc", "pic":
 		return KnownPlatform(platform)
-	case "artist", "dj", "dj_detail", "djprogram", "dj_hot", "search_dj":
+	case "album", "artist", "dj", "dj_detail", "djprogram", "dj_hot", "search_dj":
 		return platform == "netease"
 	default:
 		return false
@@ -52,6 +52,22 @@ func RequiredMembership(neteaseQuality string) Membership {
 	case "dolby", "jymaster", "sky":
 		return SVIP
 	case "jyeffect", "hires", "lossless", "exhigh":
+		return VIP
+	default:
+		return Free
+	}
+}
+
+// RequiredMembershipForPlatform reflects the highest requested quality, not
+// whether the provider will actually grant access to an individual track.
+func RequiredMembershipForPlatform(platform, quality string) Membership {
+	if platform != "tencent" {
+		return RequiredMembership(quality)
+	}
+	switch NormalizeQuality(quality) {
+	case "atmos", "master":
+		return SVIP
+	case "exhigh", "lossless":
 		return VIP
 	default:
 		return Free

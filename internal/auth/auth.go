@@ -48,9 +48,16 @@ type Verifier struct {
 	tokenHash        [sha256.Size]byte
 	now              func() time.Time
 
-	mu    sync.Mutex
-	seen  map[[sha256.Size]byte]struct{}
-	order list.List
+	mu         sync.Mutex
+	seen       map[[sha256.Size]byte]struct{}
+	order      list.List
+	tokenValid func() bool
+}
+
+// SetTokenValidity installs a fail-closed validity check before the server is
+// started. It is useful when importing a revocable token from existing data.
+func (v *Verifier) SetTokenValidity(check func() bool) {
+	v.tokenValid = check
 }
 
 func New(token string, requireAssertion bool) *Verifier {
@@ -75,6 +82,7 @@ func (v *Verifier) Preflight(r *http.Request) bool {
 	token := bearer(r)
 	digest := sha256.Sum256([]byte(token))
 	return token != "" && subtle.ConstantTimeCompare(digest[:], v.tokenHash[:]) == 1 &&
+		(v.tokenValid == nil || v.tokenValid()) &&
 		(!v.requireAssertion || (r.Header.Get("X-OpenMusic-Assertion") != "" &&
 			r.Header.Get("X-OpenMusic-Signature") != ""))
 }

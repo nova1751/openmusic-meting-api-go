@@ -36,6 +36,7 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 				URL, Level                   string
 				Time, Gain, Peak, ClosedGain json.Number
 				ClosedPeak                   json.Number
+				FreeTrialInfo, FreePartInfo  json.RawMessage
 			}
 		}
 		format := "flac"
@@ -65,6 +66,10 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 			continue
 		}
 		item := reply.Data[0]
+		if present(item.FreeTrialInfo) || present(item.FreePartInfo) || item.Level == "trial" || item.Level == "try" {
+			empty = true
+			continue
+		}
 		link := validMediaURL(item.URL)
 		if link == "" {
 			empty = true
@@ -89,6 +94,10 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 		return music.Result{}, music.ErrNoURL
 	}
 	return music.Result{}, lastError
+}
+
+func present(value json.RawMessage) bool {
+	return len(value) > 0 && string(value) != "null"
 }
 
 func idsAsNumbers(ids []numericID) []json.Number {

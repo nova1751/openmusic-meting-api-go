@@ -18,13 +18,16 @@ import (
 )
 
 type Options struct {
-	Verifier   *auth.Verifier
-	Provider   music.Provider
-	Accounts   *music.AccountPool
-	Legacy     *legacy.Backend
-	PublicBase *url.URL
-	Timeout    time.Duration
-	Logger     *slog.Logger
+	Verifier        *auth.Verifier
+	Provider        music.Provider
+	Accounts        *music.AccountPool
+	Tencent         music.Provider
+	TencentAccounts *music.AccountPool
+	Legacy          *legacy.Backend
+	Admin           http.Handler
+	PublicBase      *url.URL
+	Timeout         time.Duration
+	Logger          *slog.Logger
 }
 
 type Server struct{ Options }
@@ -34,6 +37,11 @@ func New(options Options) *Server { return &Server{options} }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if s.Admin != nil && (path == "/admin" || strings.HasPrefix(path, "/admin/")) &&
+		path != "/admin/openmusic" && path != "/admin/fm" {
+		s.Admin.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if path == legacy.BridgePrefix || strings.HasPrefix(path, legacy.BridgePrefix+"/") {
 		http.NotFound(w, r)
@@ -206,15 +214,23 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request, cookie string) {
 		fail(w, 400, "MUSIC_COOKIE_REQUIRED", "房间音源登录凭证为空")
 		return
 	}
+	provider, accounts := s.Provider, s.Accounts
 	if req.Platform != "netease" {
-		fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台需要兼容服务")
-		return
+		supported, ok := s.Tencent.(interface{ Supports(string) bool })
+		if req.Platform != "tencent" || !ok || !supported.Supports(req.Type) {
+			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台或功能需要兼容服务")
+			return
+		}
+		provider, accounts = s.Tencent, s.TencentAccounts
+		if accounts == nil {
+			accounts = music.NewAccountPool(nil)
+		}
 	}
 	var result music.Result
 	if s.Legacy != nil || room {
-		result, err = s.Provider.Lookup(r.Context(), req)
+		result, err = provider.Lookup(r.Context(), req)
 	} else {
-		result, err = s.Accounts.Lookup(r.Context(), req, s.Provider)
+		result, err = accounts.Lookup(r.Context(), req, provider)
 	}
 	if err != nil {
 		s.upstreamError(w, r.URL.Path, req.Platform, err)
