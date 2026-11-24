@@ -18,16 +18,31 @@ A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting
 
 ## Quick start
 
-Building from source requires Go 1.26 or later. The container builds and CI use Go 1.27.4. The commands below use a POSIX shell and OpenSSL.
+Building from source requires Go 1.26 or later. The container builds and CI use Go 1.27.4.
 
 ```sh
 git clone https://github.com/nova1751/openmusic-meting-api-go.git
 cd openmusic-meting-api-go
+```
+
+**POSIX shell with OpenSSL**
+
+```sh
 export METING_API_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/meting
 ```
 
-The service listens on `127.0.0.1:3000` by default. In another terminal, run `curl -fsS http://127.0.0.1:3000/readyz` to check readiness. Both health endpoints are available without a token.
+**PowerShell**
+
+```powershell
+$tokenBytes = [byte[]]::new(32)
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($tokenBytes) } finally { $rng.Dispose() }
+$env:METING_API_TOKEN = [System.BitConverter]::ToString($tokenBytes).Replace('-', '').ToLowerInvariant()
+go run ./cmd/meting
+```
+
+The service listens on `127.0.0.1:3000` by default. In another terminal, check readiness with `curl -fsS http://127.0.0.1:3000/readyz` or, in PowerShell, `Invoke-RestMethod http://127.0.0.1:3000/readyz`. Both health endpoints are available without a token.
 
 ### Signed API request
 

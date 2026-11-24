@@ -18,16 +18,31 @@
 
 ## 快速开始
 
-从源码构建需要 Go 1.26 或更高版本。容器构建和 CI 使用 Go 1.27.4。以下命令使用 POSIX Shell 和 OpenSSL。
+从源码构建需要 Go 1.26 或更高版本。容器构建和 CI 使用 Go 1.27.4。
 
 ```sh
 git clone https://github.com/nova1751/openmusic-meting-api-go.git
 cd openmusic-meting-api-go
+```
+
+**POSIX Shell（需要 OpenSSL）**
+
+```sh
 export METING_API_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/meting
 ```
 
-服务默认监听 `127.0.0.1:3000`。在另一个终端运行 `curl -fsS http://127.0.0.1:3000/readyz` 检查就绪状态。两个健康检查端点均可直接访问。
+**PowerShell**
+
+```powershell
+$tokenBytes = [byte[]]::new(32)
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($tokenBytes) } finally { $rng.Dispose() }
+$env:METING_API_TOKEN = [System.BitConverter]::ToString($tokenBytes).Replace('-', '').ToLowerInvariant()
+go run ./cmd/meting
+```
+
+服务默认监听 `127.0.0.1:3000`。在另一个终端运行 `curl -fsS http://127.0.0.1:3000/readyz` 检查就绪状态。PowerShell 下可用 `Invoke-RestMethod http://127.0.0.1:3000/readyz`。两个健康检查端点均可直接访问。
 
 ### 签名请求
 
