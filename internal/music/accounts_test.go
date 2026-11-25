@@ -59,3 +59,35 @@ func TestFMEmptyResultCoolsOffAndRetainsEmptySemantics(t *testing.T) {
 		t.Fatalf("cooldown missing: %v", err)
 	}
 }
+
+func TestTencentPicksExactQualityAcrossAccountsBeforeDowngrading(t *testing.T) {
+	for _, exact := range []bool{false, true} {
+		pool := NewAccountPool([]Account{{Cookie: "challenged", Membership: SVIP}, {Cookie: "fallback", Membership: SVIP}, {Cookie: "candidate", Membership: SVIP}})
+		var attempts []string
+		got, err := pool.Lookup(t.Context(), Request{Platform: "tencent", Type: "url", Quality: "master"}, providerFunc(func(req Request) (Result, error) {
+			attempts = append(attempts, req.Cookie)
+			switch {
+			case req.Cookie == "challenged":
+				if !req.StrictQuality {
+					t.Fatal("retried an account that needs verification")
+				}
+				return Result{}, ErrVerificationRequired
+			case req.Cookie == "candidate" && req.StrictQuality && exact:
+				return Result{Link: Link{URL: "https://example.invalid/master"}}, nil
+			case req.Cookie == "fallback" && !req.StrictQuality:
+				return Result{Link: Link{URL: "https://example.invalid/fallback"}}, nil
+			default:
+				return Result{}, ErrNoURL
+			}
+		}))
+		want := []string{"challenged", "fallback", "candidate"}
+		link := "https://example.invalid/master"
+		if !exact {
+			want = append(want, "fallback")
+			link = "https://example.invalid/fallback"
+		}
+		if err != nil || got.Link.URL != link || !reflect.DeepEqual(attempts, want) {
+			t.Fatalf("exact=%v link=%+v attempts=%v err=%v", exact, got.Link, attempts, err)
+		}
+	}
+}

@@ -17,15 +17,16 @@ var (
 )
 
 type Request struct {
-	Platform string
-	Type     string
-	ID       string
-	Quality  string
-	Cookie   string
-	Format   string
-	FM       bool
-	Redirect bool
-	Page     Pagination
+	Platform      string
+	Type          string
+	ID            string
+	Quality       string
+	StrictQuality bool
+	Cookie        string
+	Format        string
+	FM            bool
+	Redirect      bool
+	Page          Pagination
 }
 
 type Pagination struct {

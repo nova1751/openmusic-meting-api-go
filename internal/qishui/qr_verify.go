@@ -59,7 +59,7 @@ func (q *QRSession) VerificationProxy(ctx context.Context, input VerificationReq
 			headers[key] = value
 		}
 	}
-	response, _, err := q.browserRequest(ctx, passportRequest{Method: input.Method, URL: u.String(), Headers: headers, Body: input.Body, Timeout: 15000}, false)
+	response, _, err := q.exchange(ctx, passportRequest{Method: input.Method, URL: u.String(), Headers: headers, Body: input.Body, Timeout: 15000}, false)
 	if err != nil {
 		return nil, err
 	}

@@ -105,25 +105,43 @@ func (p *AccountPool) play(ctx context.Context, req Request, provider Provider, 
 			ordered[0], ordered[pos] = ordered[pos], ordered[0]
 		}
 	}
+	req.StrictQuality = req.Platform == "tencent" && RequiredMembershipForPlatform(req.Platform, req.Quality) == SVIP
 	var failed error
 	var miss bool
-	for _, index := range ordered[:min(4, len(ordered))] {
+	var downgrade []int
+	try := func(index int) (Result, error) {
 		req.Cookie = accounts[index].Cookie
 		result, err := provider.Lookup(ctx, req)
-		switch {
-		case err == nil && result.Link.URL != "":
+		if err == nil && result.Link.URL != "" {
 			result.PlaybackCookie = req.Cookie
 			return result, nil
-		case err == nil || errors.Is(err, ErrNoURL):
-			miss = true
-		case errors.Is(err, ErrInvalidID):
-			return Result{}, err
-		case errors.Is(err, ErrAccountInvalid):
-		default:
-			failed = err
 		}
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
+		}
+		if errors.Is(err, ErrInvalidID) {
+			return Result{}, err
+		}
+		switch {
+		case err == nil || errors.Is(err, ErrNoURL):
+			miss = true
+		case !errors.Is(err, ErrAccountInvalid):
+			failed = err
+		}
+		if req.StrictQuality && !errors.Is(err, ErrVerificationRequired) && !errors.Is(err, ErrAccountInvalid) {
+			downgrade = append(downgrade, index)
+		}
+		return Result{}, nil
+	}
+	for _, index := range ordered[:min(4, len(ordered))] {
+		if result, err := try(index); err != nil || result.Link.URL != "" {
+			return result, err
+		}
+	}
+	req.StrictQuality = false
+	for _, index := range downgrade {
+		if result, err := try(index); err != nil || result.Link.URL != "" {
+			return result, err
 		}
 	}
 	if miss {

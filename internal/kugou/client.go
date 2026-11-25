@@ -52,6 +52,7 @@ func New(client *http.Client) *Client {
 type request struct {
 	address, router, cookie string
 	params                  map[string]string
+	omitCookie              bool
 	body                    any
 	profile                 profile
 }
@@ -89,7 +90,7 @@ func (c *Client) call(ctx context.Context, input request) (providerhttp.Object, 
 	if input.router != "" {
 		headers.Set("X-Router", input.router)
 	}
-	if input.cookie != "" {
+	if input.cookie != "" && !input.omitCookie {
 		headers.Set("Cookie", input.cookie)
 	}
 	method, bodyText := http.MethodGet, ""

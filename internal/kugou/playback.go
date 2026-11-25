@@ -3,6 +3,7 @@ package kugou
 import (
 	"context"
 	"errors"
+	"maps"
 	"math"
 	"net/url"
 	"strconv"
@@ -98,53 +99,106 @@ func (c *Client) play(ctx context.Context, req music.Request, hash string, album
 	if !ok {
 		return music.Result{}, music.ErrNoURL
 	}
-	token := providerhttp.CookieValue(req.Cookie, "token")
-	user := providerhttp.CookieValue(req.Cookie, "userid")
-	if token == "" || user == "" {
-		return music.Result{}, music.ErrAccountInvalid
-	}
 	profile := lite
-	if strings.EqualFold(providerhttp.CookieValue(req.Cookie, "KUGOU_API_PLATFORM", "kg_platform"), "standard") {
+	mode := strings.ToLower(providerhttp.CookieValue(req.Cookie, "KUGOU_API_PLATFORM", "kg_platform"))
+	if mode == "standard" || mode != "lite" && providerhttp.CookieValue(req.Cookie, "token") == "" {
 		profile = standard
 	}
-	req.Cookie = c.cachedDevice(c.prepareDevice(req.Cookie), profile)
-	params := map[string]string{"album_id": "0", "area_code": "1", "hash": hash, "ssa_flag": "is_fromtrack", "version": "11430", "clientver": "11430",
-		"page_id": profile.pageID, "quality": q.wire, "album_audio_id": strconv.FormatUint(albumAudioID, 10),
-		"behavior": "play", "pid": profile.playerID, "cmd": "26", "pidversion": "3001", "cdnBackup": "1",
-		"IsFreePart": "0", "ppage_id": profile.playPages, "module": "", "key": digest(hash + profile.trackSalt + profile.appID + deviceMID(req.Cookie) + user)}
-	input := request{address: gateway + "/v5/url", router: "trackercdn.kugou.com", params: params, cookie: req.Cookie, profile: profile}
-	res, err := c.call(ctx, input)
-	if errors.Is(err, serviceError(20028)) && !validDFID(req.Cookie) {
-		if registered, registerErr := c.registerDevice(ctx, req.Cookie, profile); registerErr == nil {
-			req.Cookie, input.cookie = registered, registered
-			res, err = c.call(ctx, input)
-		}
+	alternate := standard
+	if profile == standard {
+		alternate = lite
 	}
-	if err == nil {
-		if link := playbackLink(audioInfo(res)); link.URL != "" {
-			return music.Result{Link: link}, nil
-		}
-	}
-	if errors.Is(err, music.ErrAccountInvalid) {
-		return music.Result{}, err
-	}
-	if errors.Is(err, serviceError(20028)) {
-		return music.Result{}, music.ErrVerificationRequired
+	cookie := c.prepareDevice(req.Cookie)
+	link, device, primaryErr := c.playWithProfile(ctx, cookie, hash, albumAudioID, profile, q)
+	if link.URL != "" {
+		return music.Result{Link: link}, nil
 	}
 	if ctx.Err() != nil {
 		return music.Result{}, ctx.Err()
 	}
-	link, authErr := c.authorizedPlayback(ctx, req.Cookie, hash, profile, params)
-	if authErr == nil && link.URL != "" {
+	if primaryErr != nil && !kugouPlaybackMiss(primaryErr) {
+		return music.Result{}, primaryErr
+	}
+	// Use the other client profile without attaching any account credentials.
+	anonymous := "KUGOU_API_MID=" + deviceMID(device)
+	if dfid := providerhttp.CookieValue(device, "dfid", "kg_dfid"); dfid != "" {
+		anonymous += "; dfid=" + dfid
+	}
+	anonymous += "; KUGOU_API_GUID=" + providerhttp.CookieValue(device, "KUGOU_API_GUID")
+	link, _, err := c.playWithProfile(ctx, anonymous, hash, albumAudioID, alternate, q)
+	if link.URL != "" {
 		return music.Result{Link: link}, nil
 	}
-	if authErr != nil {
-		return music.Result{}, authErr
+	if ctx.Err() != nil {
+		return music.Result{}, ctx.Err()
 	}
-	if err != nil && !errors.Is(err, serviceError(20010)) {
+	if primaryErr != nil {
+		return music.Result{}, primaryErr
+	}
+	if err != nil {
 		return music.Result{}, err
 	}
 	return music.Result{}, music.ErrNoURL
+}
+
+func kugouPlaybackMiss(err error) bool {
+	if errors.Is(err, music.ErrVerificationRequired) || errors.Is(err, music.ErrNoURL) {
+		return true
+	}
+	switch {
+	case errors.Is(err, serviceError(20010)), errors.Is(err, serviceError(200101)), errors.Is(err, serviceError(31863)):
+		return true
+	}
+	var response providerhttp.StatusError
+	return errors.As(err, &response) && response.Code >= 500 && response.Code < 600
+}
+
+func (c *Client) playWithProfile(ctx context.Context, cookie, hash string, albumAudioID uint64, profile profile, q quality) (music.Link, string, error) {
+	cookie = c.cachedDevice(cookie, profile)
+	user := providerhttp.CookieValue(cookie, "userid")
+	loggedIn := user != "" && providerhttp.CookieValue(cookie, "token") != ""
+	params := map[string]string{"album_id": "0", "area_code": "1", "hash": hash, "ssa_flag": "is_fromtrack", "version": "11430", "clientver": "11430",
+		"page_id": profile.pageID, "quality": q.wire, "album_audio_id": strconv.FormatUint(albumAudioID, 10),
+		"behavior": "play", "pid": profile.playerID, "cmd": "26", "pidversion": "3001", "cdnBackup": "1",
+		"IsFreePart": "0", "ppage_id": profile.playPages, "module": "", "key": digest(hash + profile.trackSalt + profile.appID + deviceMID(cookie) + providerhttp.First(user, "0"))}
+	attempted := false
+	try := func(lookup func(string) (music.Link, error)) (music.Link, error) {
+		link, err := lookup(cookie)
+		if !errors.Is(err, serviceError(20028)) {
+			return link, err
+		}
+		if attempted || validDFID(cookie) {
+			return music.Link{}, music.ErrVerificationRequired
+		}
+		attempted = true
+		registered, regErr := c.registerDevice(ctx, cookie, profile)
+		if regErr != nil {
+			return music.Link{}, music.ErrVerificationRequired
+		}
+		cookie = registered
+		link, err = lookup(cookie)
+		if errors.Is(err, serviceError(20028)) {
+			return music.Link{}, music.ErrVerificationRequired
+		}
+		return link, err
+	}
+	link, directErr := try(func(credential string) (music.Link, error) {
+		res, err := c.call(ctx, request{address: gateway + "/v5/url", router: "trackercdn.kugou.com", params: params, cookie: credential, profile: profile, omitCookie: !loggedIn})
+		return playbackLink(audioInfo(res)), err
+	})
+	if link.URL != "" || !loggedIn || directErr != nil && !kugouPlaybackMiss(directErr) {
+		return link, cookie, directErr
+	}
+	link, authErr := try(func(credential string) (music.Link, error) {
+		return c.authorizedPlayback(ctx, credential, hash, profile, maps.Clone(params))
+	})
+	if link.URL != "" {
+		return link, cookie, nil
+	}
+	if directErr != nil {
+		return music.Link{}, cookie, directErr
+	}
+	return music.Link{}, cookie, authErr
 }
 
 func (c *Client) authorizedPlayback(ctx context.Context, cookie, hash string, profile profile, params map[string]string) (music.Link, error) {

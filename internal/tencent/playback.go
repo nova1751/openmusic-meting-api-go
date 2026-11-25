@@ -3,6 +3,7 @@ package tencent
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
@@ -20,9 +21,9 @@ type audioQuality struct {
 var audioQualities = []audioQuality{
 	{"master", "AI00", ".flac", "臻品母带"},
 	{"atmos", "Q000", ".flac", "臻品全景声"},
-	{"lossless", "F000", ".flac", "无损"},
-	{"exhigh", "M800", ".mp3", "极高"},
-	{"standard", "M500", ".mp3", "标准"},
+	{"lossless", "F000", ".flac", "SQ无损品质"},
+	{"exhigh", "M800", ".mp3", "HQ高品质"},
+	{"standard", "M500", ".mp3", "标准品质"},
 }
 
 func cookieField(cookie, name string) string {
@@ -93,7 +94,11 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 	}
 	guid := random.String()
 	var lastErr error
-	for _, level := range audioQualities[start:] {
+	levels := audioQualities[start:]
+	if req.StrictQuality {
+		levels = levels[:1]
+	}
+	for _, level := range levels {
 		payload := map[string]any{
 			"req_0": map[string]any{"module": "vkey.GetVkeyServer", "method": "CgiGetVkey", "param": map[string]any{
 				"filename": []string{level.prefix + req.ID + mediaMID + level.suffix}, "guid": guid,
@@ -116,7 +121,16 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 				} `json:"data"`
 			} `json:"req_0"`
 		}
-		if err := c.request(ctx, http.MethodPost, "https://u.y.qq.com/cgi-bin/musicu.fcg", req.Cookie, payload, &result); err != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return music.Result{}, err
+		}
+		query := url.Values{
+			"-": {"getplaysongvkey"}, "g_tk": {"5381"}, "loginUin": {uin}, "hostUin": {"0"},
+			"format": {"json"}, "inCharset": {"utf8"}, "outCharset": {"utf-8"}, "notice": {"0"},
+			"platform": {"yqq.json"}, "needNewCode": {"0"}, "data": {string(data)},
+		}
+		if err := c.request(ctx, http.MethodGet, "https://u.y.qq.com/cgi-bin/musicu.fcg?"+query.Encode(), "", nil, &result); err != nil {
 			if ctx.Err() != nil {
 				return music.Result{}, ctx.Err()
 			}

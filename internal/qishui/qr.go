@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 )
 
 type QRSession struct {
+	exchange                                                         func(context.Context, passportRequest, bool) (passportResponse, []*http.Cookie, error)
 	decision                                                         object
 	tab                                                              context.Context
 	close                                                            func()
@@ -52,7 +54,7 @@ func (q *QRSession) passport(ctx context.Context, method, path string, query, fo
 		request.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 		request.Headers["x-ss-stub"] = strings.ToUpper(hex.EncodeToString(sum[:]))
 	}
-	reply, cookies, err := q.browserRequest(ctx, request, true)
+	reply, cookies, err := q.exchange(ctx, request, true)
 	if err != nil {
 		return nil, err
 	}
@@ -93,24 +95,31 @@ func (b *QRBrowser) CreateQR(ctx context.Context) (*QRSession, error) {
 	q := &QRSession{tab: tab, close: closeTab, created: time.Now(), device: qrDigits(16), install: qrDigits(15),
 		portrait: uuid[:8] + "-" + uuid[8:12] + "-4" + uuid[13:16] + "-8" + uuid[17:20] + "-" + uuid[20:] + ".login",
 		msToken:  base64.RawURLEncoding.EncodeToString(buffer) + "==", last: "waiting"}
+	q.exchange = q.browserRequest
+	if err := q.create(ctx); err != nil {
+		q.Close()
+		return nil, err
+	}
+	return q, nil
+}
+
+func (q *QRSession) create(ctx context.Context) error {
 	payload, err := q.passport(ctx, "GET", "/passport/web/get_qrcode/", url.Values{
 		"next": {pcHost}, "need_logo": {"false"}, "need_short_url": {"false"},
 	}, nil)
 	if err != nil {
-		q.Close()
-		return nil, err
+		return err
 	}
 	data := payload.Object("data")
 	index, err := url.Parse(data.Text("qrcode_index_url"))
 	q.token = data.Text("token")
 	if err != nil || payload.Text("message") != "success" || data.Int("error_code") != 0 || q.token == "" || index.Query().Get("token") == "" {
-		q.Close()
-		return nil, errors.New("Qishui did not issue a QR code")
+		return errors.New("Qishui did not issue a QR code")
 	}
 	q.scanURL = "https://bff-pc.qishui.com/light/invoke/scan_login?" + url.Values{
 		"token": {index.Query().Get("token")}, "os": {"Windows"}, "computer_name": {"OpenMusic"},
 	}.Encode()
-	return q, nil
+	return nil
 }
 
 func (q *QRSession) Poll(ctx context.Context) (status, cookie string, err error) {
