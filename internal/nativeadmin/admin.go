@@ -30,6 +30,11 @@ import (
 var assets embed.FS
 
 type Admin struct {
+	logMu                              sync.Mutex
+	requestLogs                        []json.RawMessage
+	qqBrowser                          *tencent.VerificationBrowser
+	monitorMu                          sync.Mutex
+	monitor                            monitorStatus
 	dataDir, keyFile, keyValue, origin string
 	client                             *netease.Client
 	validators                         map[string]music.AccountValidator
@@ -148,8 +153,13 @@ func (a *Admin) login(w http.ResponseWriter, r *http.Request) {
 		reject(w, 503, "无法创建会话")
 		return
 	}
+	entry, err := a.userEntry(input.Username)
+	if err != nil || !validRole(entry.Role) {
+		reject(w, 401, "会话无法创建")
+		return
+	}
 	key := sha256.Sum256([]byte(token))
-	s := &session{username: input.Username, csrf: csrf, expires: time.Now().Add(12 * time.Hour)}
+	s := &session{role: entry.Role, username: input.Username, csrf: csrf, expires: time.Now().Add(12 * time.Hour)}
 	a.mu.Lock()
 	for key, item := range a.sessions {
 		if time.Now().After(item.expires) {
@@ -165,7 +175,11 @@ func (a *Admin) login(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "openmusic_admin", Value: token, Path: "/admin",
 		MaxAge: 12 * 60 * 60, Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	reply(w, 200, map[string]any{"success": true, "csrf": csrf})
+	reply(w, 200, map[string]any{"success": true, "csrf": csrf, "role": s.role})
+}
+
+func (a *Admin) SetQQVerification(browser *tencent.VerificationBrowser) {
+	a.qqBrowser = browser
 }
 
 func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -173,17 +187,27 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, private")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	if r.Method != http.MethodGet && r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	}
+	if strings.HasPrefix(r.URL.Path, qishuiAssetsRoot) {
+		a.qishuiAsset(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, qishuiVerifyRoot) {
+		a.qishuiVerify(w, r)
+		return
+	}
 	if r.Method == http.MethodGet {
-		switch r.URL.Path {
-		case "/admin", "/admin/":
+		if a.PagePath(r.URL.Path) {
 			data, _ := assets.ReadFile("ui/index.html")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write(data)
 			return
+		}
+		switch r.URL.Path {
+
 		case "/admin/assets/app.js":
 			data, _ := assets.ReadFile("ui/app.js")
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -200,7 +224,7 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reject(w, 403, "请求来源不允许")
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Path == "/admin/api/login" {
+	if r.Method == http.MethodPost && (r.URL.Path == "/admin/api/login" || r.URL.Path == "/admin/login") {
 		a.login(w, r)
 		return
 	}
@@ -213,20 +237,40 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reject(w, 403, "请求校验失败")
 		return
 	}
+	if s.role != "admin" && !ordinaryUserPath(r.URL.Path) {
+		reject(w, 403, "权限不足")
+		return
+	}
 	switch {
+	case r.URL.Path == "/admin/profile" || r.URL.Path == "/admin/users" || strings.HasPrefix(r.URL.Path, "/admin/users/"):
+		a.userRoutes(w, r, s, key)
+	case r.URL.Path == "/admin/monitor" || strings.HasPrefix(r.URL.Path, "/admin/monitor/"):
+		a.monitorRoutes(w, r)
+	case r.URL.Path == "/admin/webhook" || strings.HasPrefix(r.URL.Path, "/admin/webhook/"):
+		a.webhookRoutes(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/logs":
+		a.showLogs(w, r, "logs.json")
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/api-logs":
+		a.showLogs(w, r, "api_logs.json")
 	case r.URL.Path == "/admin/config" || strings.HasPrefix(r.URL.Path, "/admin/config/"):
 		a.configRoutes(w, r)
 	case r.URL.Path == "/admin/tokens" || strings.HasPrefix(r.URL.Path, "/admin/tokens/"):
 		a.tokenRoutes(w, r, s)
 	case r.URL.Path == "/admin/cookies" || strings.HasPrefix(r.URL.Path, "/admin/cookies/"):
 		a.accountRoutes(w, r, s)
-	case r.Method == http.MethodGet && r.URL.Path == "/admin/api/session":
-		reply(w, 200, map[string]any{"success": true, "username": s.username, "csrf": s.csrf})
-	case r.Method == http.MethodPost && r.URL.Path == "/admin/api/logout":
+	case r.Method == http.MethodGet && (r.URL.Path == "/admin/api/session" || r.URL.Path == "/admin/check"):
+		reply(w, 200, map[string]any{"success": true, "username": s.username, "csrf": s.csrf, "role": s.role})
+	case r.Method == http.MethodPost && (r.URL.Path == "/admin/api/logout" || r.URL.Path == "/admin/logout"):
 		a.mu.Lock()
 		delete(a.sessions, key)
 		a.mu.Unlock()
 		s.closeQR()
+		s.mu.Lock()
+		if s.qqWindow != nil {
+			s.qqWindow.Close()
+			s.qqWindow = nil
+		}
+		s.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: "openmusic_admin", Path: "/admin", MaxAge: -1,
 			Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		reply(w, 200, map[string]any{"success": true})
@@ -374,4 +418,14 @@ func (a *Admin) pollQR(w http.ResponseWriter, r *http.Request, s *session) {
 		s.qr = nil
 	}
 	reply(w, 200, map[string]any{"success": true, "status": status.Status})
+}
+
+func ordinaryUserPath(path string) bool {
+	switch path {
+	case "/admin/profile", "/admin/check", "/admin/logout", "/admin/api/session", "/admin/api/logout", "/admin/api/password",
+		"/admin/api/2fa", "/admin/api/2fa/setup", "/admin/api/2fa/image", "/admin/api/2fa/enable", "/admin/api/2fa/disable":
+		return true
+	default:
+		return false
+	}
 }

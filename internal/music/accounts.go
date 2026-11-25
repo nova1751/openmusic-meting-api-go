@@ -112,6 +112,7 @@ func (p *AccountPool) play(ctx context.Context, req Request, provider Provider, 
 		result, err := provider.Lookup(ctx, req)
 		switch {
 		case err == nil && result.Link.URL != "":
+			result.PlaybackCookie = req.Cookie
 			return result, nil
 		case err == nil || errors.Is(err, ErrNoURL):
 			miss = true

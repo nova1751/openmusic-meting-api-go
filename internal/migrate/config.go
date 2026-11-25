@@ -11,10 +11,12 @@ import (
 )
 
 type Settings struct {
-	OpenMusicAuth   bool              `json:"openmusicAuthEnabled"`
-	BackupEnabled   bool              `json:"backupEnabled"`
-	QishuiSignerURL string            `json:"qishuiSignerUrl"`
-	FMPriority      map[string]string `json:"fmPriorityCookieIds"`
+	AdminPath          string            `json:"adminPath"`
+	LoudnessServiceURL string            `json:"loudnessServiceUrl"`
+	OpenMusicAuth      bool              `json:"openmusicAuthEnabled"`
+	BackupEnabled      bool              `json:"backupEnabled"`
+	QishuiSignerURL    string            `json:"qishuiSignerUrl"`
+	FMPriority         map[string]string `json:"fmPriorityCookieIds"`
 }
 
 func Config(dataDir string) (Settings, error) {
@@ -35,6 +37,10 @@ func QishuiSigner(dataDir string) string {
 }
 
 func WriteSetting(dataDir, field string, value any) error {
+	return WriteSettings(dataDir, map[string]any{field: value})
+}
+
+func WriteSettings(dataDir string, updates map[string]any) error {
 	path := filepath.Join(dataDir, "config.json")
 	settings := make(map[string]json.RawMessage)
 	if err := readJSON(path, &settings); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -43,8 +49,10 @@ func WriteSetting(dataDir, field string, value any) error {
 	if settings == nil {
 		return errors.New("invalid Node settings")
 	}
-	if err := putJSON(settings, field, value); err != nil {
-		return err
+	for field, value := range updates {
+		if err := putJSON(settings, field, value); err != nil {
+			return err
+		}
 	}
 	return atomicJSON(path, settings)
 }

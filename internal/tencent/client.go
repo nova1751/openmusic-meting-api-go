@@ -15,7 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 	"github.com/nova1751/openmusic-meting-api-go/internal/providerhttp"
@@ -25,9 +25,15 @@ const maxResponse = 16 << 20
 
 var midPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
 
-type Client struct{ http *http.Client }
+type Client struct {
+	http        *http.Client
+	challengeMu sync.Mutex
+	challenges  map[[32]byte]Challenge
+}
 
-func New(client *http.Client) *Client { return &Client{http: client} }
+func New(client *http.Client) *Client {
+	return &Client{http: client, challenges: make(map[[32]byte]Challenge)}
+}
 
 func Supports(kind string) bool {
 	switch kind {
@@ -299,14 +305,16 @@ func (c *Client) lyrics(ctx context.Context, req music.Request) (music.Result, e
 	if req.Format != "json" {
 		return music.Result{Lyrics: lyrics}, requestErr
 	}
+	numeric, word, translation, romanized := c.wordLyrics(ctx, req.ID, req.Cookie)
+	lyrics.Translation = first(translation, lyrics.Translation)
+	lyrics.Romanized = romanized
+	if word != "" {
+		lyrics.WordLyric, lyrics.WordFormat, lyrics.Source = word, "qrc", "platform"
+		return music.Result{Lyrics: lyrics}, nil
+	}
 	ids := []string{req.ID}
-	if _, err := strconv.ParseUint(req.ID, 10, 64); err != nil {
-		detailCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		info, err := c.songDetails(detailCtx, req.ID)
-		cancel()
-		if id := info.ID.String(); err == nil && midPattern.MatchString(id) && id != req.ID {
-			ids = append([]string{id}, ids...)
-		}
+	if numeric != req.ID && midPattern.MatchString(numeric) {
+		ids = append([]string{numeric}, ids...)
 	}
 	if text := providerhttp.AMLL(ctx, c.http, "qqMusicId", ids...); text != "" {
 		lyrics.WordLyric, lyrics.WordFormat, lyrics.Source = text, "ttml", "amll"

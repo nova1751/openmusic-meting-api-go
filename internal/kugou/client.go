@@ -3,6 +3,7 @@ package kugou
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
@@ -34,9 +36,18 @@ var (
 	standard = profile{"1005", "20489", "OIlwieks28dk2k092lksi2UIkp", "57ae12eb6890223e355ccfcb74edf70d", "151369488", "2", "463467626,350369493,788954147"}
 )
 
-type Client struct{ http *http.Client }
+type Client struct {
+	http     *http.Client
+	guid     string
+	deviceMu sync.Mutex
+	devices  map[[32]byte]deviceEntry
+}
 
-func New(client *http.Client) *Client { return &Client{http: client} }
+func New(client *http.Client) *Client {
+	var random [16]byte
+	rand.Read(random[:])
+	return &Client{http: client, guid: digest(hex.EncodeToString(random[:])), devices: make(map[[32]byte]deviceEntry)}
+}
 
 type request struct {
 	address, router, cookie string

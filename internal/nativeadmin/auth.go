@@ -33,6 +33,7 @@ import (
 const passwordIterations = 310000
 
 type user struct {
+	AuthKey          string `json:"goAuthKey"`
 	Password         string `json:"password"`
 	Role             string `json:"role"`
 	TwoFactorEnabled bool   `json:"twoFactorEnabled"`
@@ -46,17 +47,21 @@ type passwordRecord struct {
 }
 
 type session struct {
-	mu           sync.Mutex
-	username     string
-	csrf         string
-	expires      time.Time
-	qr           *netease.QRSession
-	kugouQR      *kugou.QRSession
-	qqQR         *tencent.QRSession
-	qishuiQR     *qishui.QRSession
-	qrSaved      bool
-	pendingTOTP  string
-	totpAttempts int
+	qqWindow        *tencent.VerificationWindow
+	qqWindowID      string
+	role            string
+	qishuiVerifyKey string
+	mu              sync.Mutex
+	username        string
+	csrf            string
+	expires         time.Time
+	qr              *netease.QRSession
+	kugouQR         *kugou.QRSession
+	qqQR            *tencent.QRSession
+	qishuiQR        *qishui.QRSession
+	qrSaved         bool
+	pendingTOTP     string
+	totpAttempts    int
 }
 
 type loginAttempt struct {
@@ -205,7 +210,8 @@ func (a *Admin) authenticate(username, password, code string) (bool, bool, error
 		return false, false, errors.New("invalid administrator password data")
 	}
 	valid := false
-	if record, ok := records[username]; ok {
+	authKey := entry.passwordKey(username)
+	if record, ok := records[authKey]; ok {
 		salt, saltErr := base64.RawURLEncoding.DecodeString(record.Salt)
 		expected, hashErr := base64.RawURLEncoding.DecodeString(record.Hash)
 		if saltErr != nil || hashErr != nil || len(salt) != 16 || len(expected) != 32 ||
@@ -218,9 +224,9 @@ func (a *Admin) authenticate(username, password, code string) (bool, bool, error
 		}
 		valid = subtle.ConstantTimeCompare(derived, expected) == 1
 	} else {
-		valid = exists && entry.Role == "admin" && verifyNodePassword(password, entry.Password)
+		valid = exists && validRole(entry.Role) && verifyNodePassword(password, entry.Password)
 	}
-	valid = valid && exists && entry.Role == "admin"
+	valid = valid && exists && validRole(entry.Role)
 	if valid && entry.TwoFactorEnabled && code == "" {
 		return false, true, nil
 	}
@@ -237,7 +243,7 @@ func (a *Admin) authenticate(username, password, code string) (bool, bool, error
 		return false, false, nil
 	}
 	delete(a.attempts, key)
-	if _, ok := records[username]; !ok {
+	if _, ok := records[authKey]; !ok {
 		salt := make([]byte, 16)
 		if _, err := rand.Read(salt); err != nil {
 			return false, false, err
@@ -246,7 +252,7 @@ func (a *Admin) authenticate(username, password, code string) (bool, bool, error
 		if err != nil {
 			return false, false, err
 		}
-		records[username] = passwordRecord{Salt: base64.RawURLEncoding.EncodeToString(salt),
+		records[authKey] = passwordRecord{Salt: base64.RawURLEncoding.EncodeToString(salt),
 			Hash: base64.RawURLEncoding.EncodeToString(derived), Iterations: passwordIterations}
 		if err := writePasswords(passwordPath, records); err != nil {
 			return false, false, err

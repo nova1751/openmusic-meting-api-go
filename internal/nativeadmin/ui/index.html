@@ -21,9 +21,17 @@
       </form>
     </section>
     <section id="dashboard" hidden>
-      <div class="heading"><h2>音源账号</h2><button type="button" id="logout">退出登录</button></div>
+      <div class="heading"><h2>账号管理</h2><button type="button" id="logout">退出登录</button></div>
+      <section id="admin-sources">
       <p>账号凭据保存在服务器上，不会发送到此页面。</p>
       <ul id="accounts"></ul>
+      <section id="qq-verify" hidden>
+        <h3>QQ 音乐账号验证</h3>
+        <p>在下方窗口完成 QQ 音乐的官方验证。</p>
+        <button type="button" id="qq-retry">重试播放</button>
+        <button type="button" id="qq-close">关闭验证窗口</button>
+        <p><img id="qq-frame" alt="QQ 音乐验证窗口" width="400" height="720" draggable="false"></p>
+      </section>
       <label>扫码平台 <select id="qr-platform"><option value="netease">网易云音乐</option><option value="tencent">QQ 音乐</option><option value="kugou">酷狗音乐</option><option value="qishui">汽水音乐</option></select></label>
       <button type="button" id="create-qr">创建登录二维码</button>
       <details>
@@ -38,7 +46,47 @@
       <section id="qr" hidden>
         <h2>扫码登录</h2>
         <p id="qr-status" role="status" aria-live="polite"></p>
+        <iframe id="qr-verify" sandbox="allow-scripts" title="汽水音乐二次验证" width="520" height="650" hidden></iframe>
         <img id="qr-image" alt="使用所选音乐 App 扫描二维码" width="256" height="256">
+      </section>
+      <details>
+        <summary>API Token</summary>
+        <ul id="tokens"></ul>
+        <form id="token-form">
+          <label>名称 <input name="name" required maxlength="128"></label>
+          <button type="submit">创建</button>
+        </form>
+        <p id="new-token" hidden></p>
+      </details>
+      <details>
+        <summary>后台用户</summary>
+        <ul id="users"></ul>
+        <form id="user-form">
+          <label>用户名 <input name="username" required maxlength="128" autocomplete="off"></label>
+          <label>密码 <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label>角色 <select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+          <button type="submit">创建</button>
+        </form>
+      </details>
+      <details>
+        <summary>账号监测和 Webhook</summary>
+        <form id="monitor-form">
+          <label><input name="enabled" type="checkbox">启用定期检查</label>
+          <label>间隔（分钟） <input name="interval" type="number" min="5" max="1440" required></label>
+          <button type="submit">保存</button>
+          <button type="button" id="monitor-now">立即检查</button>
+        </form>
+        <form id="webhook-form">
+          <label><input name="enabled" type="checkbox">启用通知</label>
+          <label>Webhook 地址 <input name="url" type="url"></label>
+          <label>内容类型 <input name="contentType"></label>
+          <label>请求头 JSON <textarea name="headers" rows="2"></textarea></label>
+          <label>消息模板 JSON <textarea name="bodyTemplate" rows="2"></textarea></label>
+          <button type="submit">保存</button>
+          <button type="button" id="webhook-test">发送测试通知</button>
+        </form>
+        <ul id="monitor-logs"></ul>
+      </details>
       </section>
       <section>
         <h2>修改管理密码</h2>

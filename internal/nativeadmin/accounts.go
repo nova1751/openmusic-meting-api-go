@@ -62,6 +62,14 @@ func (a *Admin) checkAccount(ctx context.Context, platform, cookie string) (musi
 func (a *Admin) accountRoutes(w http.ResponseWriter, r *http.Request, s *session) {
 	path := strings.TrimPrefix(r.URL.Path, "/admin/cookies")
 	id, action, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if id == "tencent-verifications" && action == "" && r.Method == http.MethodGet {
+		a.tencentChallenges(w)
+		return
+	}
+	if id != "" && (strings.HasPrefix(action, "verification/") || action == "retry-play") {
+		a.tencentVerification(w, r, s, id, action)
+		return
+	}
 	if r.Method == http.MethodGet && action == "" {
 		accounts, err := migrate.List(a.dataDir)
 		if err != nil {

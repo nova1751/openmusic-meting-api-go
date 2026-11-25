@@ -124,6 +124,11 @@ func Load() (Config, error) {
 		}
 		cfg.DJPageDelay = time.Duration(ms) * time.Millisecond
 	}
+	if cfg.NativeAdmin && os.Getenv("ADMIN_PASSWORD") != "" {
+		if err := os.MkdirAll(cfg.NodeDataDir, 0700); err != nil {
+			return cfg, fmt.Errorf("create native data directory: %w", err)
+		}
+	}
 	if cfg.LegacyURL != nil && cfg.NodeDataDir != "" {
 		return cfg, errors.New("METING_NODE_DATA_DIR is only available in standalone mode")
 	}

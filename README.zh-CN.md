@@ -13,7 +13,7 @@
 | 房间私有音乐和漫游 | Go | Node.js |
 | 汽水音频源信息、解密和范围读取 | Go | Node.js |
 | Cookie 管理、扫码、API Token、双重验证和快照 | 原生后台，汽水扫码需要 Chromium 和 SDK 资源 | 原版后台 |
-| 交互式验证、多用户、监测和 Webhook | 使用兼容部署 | Node.js |
+| 交互式验证、多用户、共享账号、监测和 Webhook | Go，验证需要 Chromium 和上游实际下发的挑战 | Node.js |
 | OpenMusic 令牌和请求签名 | Go | 使用原 Node.js 令牌和签名设置 |
 | 存活与就绪检查 | `/livez` 和 `/readyz` | `/livez` 和 `/readyz` |
 
@@ -111,7 +111,9 @@ KUGOU_ACCOUNTS_FILE 和 QISHUI_ACCOUNTS_FILE 加载。汽水取链沿用旧配�
 | `METING_API_TOKEN` | 独立模式必填，或使用旧令牌 | 至少 32 个非空白字符的 API 令牌 |
 | `OPENMUSIC_AUTH_ENABLED` | `true` | 独立模式是否要求签名断言。设为 `false` 后仍校验 Bearer 令牌。 |
 | `NETEASE_ACCOUNTS_FILE` | 未设置 | 独立模式启动时加载的账号 JSON 文件 |
-| `TENCENT_ACCOUNTS_FILE` | 未设置 | 独立模式启动时加载的 QQ 账号 JSON 文件 |
+| `TENCENT_ACCOUNTS_FILE`、`KUGOU_ACCOUNTS_FILE`、`QISHUI_ACCOUNTS_FILE` | 未设置 | 其他平台账号文件 |
+| `QISHUI_SIGNER_URL`、`LOUDNESS_SERVICE_URL` | 未设置 | 外置服务地址，已保存的旧配置优先 |
+| `QISHUI_SECURITY_ASSETS_DIR`、`QISHUI_CHROMIUM_PATH` | 未设置 | 汽水扫码的已有 SDK 目录和可选 Chromium 路径 |
 | `METING_NODE_DATA_DIR` | 未设置 | 只读加载旧 Node 数据目录中的加密账号；不能与独立账号文件同时使用 |
 | `METING_COOKIE_KEY_FILE` | 旧数据目录内的密钥文件 | 旧版 Cookie 加密密钥路径 |
 | `METING_COOKIE_ENCRYPTION_KEY` | 未设置 | 旧版使用的环境变量密钥；优先于密钥文件 |
@@ -127,9 +129,9 @@ KUGOU_ACCOUNTS_FILE 和 QISHUI_ACCOUNTS_FILE 加载。汽水取链沿用旧配�
 | `LEGACY_BRIDGE_KEY` | 未设置 | Go 服务与 Node.js 桥接服务共用的内部密钥 |
 
 `METING_NATIVE_ADMIN=true` 需要 HTTPS 公共源站、回环监听和含现有管理员的
-旧数据副本。登录兼容旧版和 scrypt 密码。QQ 续期需要原 Cookie 中的设备档案和续期凭据。
-汽水普通扫码依赖 Chromium 和现有 SDK 资源，详见迁移指南。QQ QRC、QQ 交互式验证、
-汽水二次验证、多用户及监测仍使用兼容服务。
+旧数据副本。全新部署可用 ADMIN_PASSWORD 和可选的 ADMIN_USERNAME 初始化。登录兼容旧版和 scrypt 密码。QQ 续期需要原 Cookie 中的设备档案和续期凭据。
+汽水扫码与二次验证依赖 Chromium 和现有 SDK 资源。QQ 官方验证窗口也需要 Chromium。
+这两种交互式验证和会员取链需要使用实际账号验收，详见迁移指南。
 
 首次登录生成独立的 Go 密码文件。回滚使用旧 Node 用户文件中的密码。
 每个数据目录同一时间由一个进程写入。

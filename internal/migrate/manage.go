@@ -26,6 +26,7 @@ func entries(path string) (map[string]map[string]json.RawMessage, error) {
 }
 
 type AccountChange struct {
+	Contribution                            *Contribution
 	Cookie, Platform, Username, MatchUserID string
 	Note                                    *string
 	Active                                  *bool
@@ -41,7 +42,20 @@ func SaveAccount(dataDir, keyFile, keyValue, id string, change AccountChange) (s
 	if err != nil {
 		return "", err
 	}
-	if id == "" && change.MatchUserID != "" {
+	if id == "" && change.Contribution != nil {
+		for candidate, entry := range accounts {
+			var key, note string
+			_ = json.Unmarshal(entry["contributionKey"], &key)
+			_ = json.Unmarshal(entry["note"], &note)
+			if key == change.Contribution.Key || note == "contribution:"+change.Contribution.Key {
+				if id != "" {
+					return "", errors.New("multiple matching contributions")
+				}
+				id = candidate
+			}
+		}
+	}
+	if id == "" && change.MatchUserID != "" && change.Contribution == nil {
 		for key, record := range accounts {
 			var savedPlatform string
 			var savedProfile struct {
@@ -85,6 +99,9 @@ func SaveAccount(dataDir, keyFile, keyValue, id string, change AccountChange) (s
 		accounts[id] = entry
 		values["id"], values["platform"], values["source"] = id, platform, "admin"
 		values["createdAt"], values["createdBy"], values["isActive"] = now, change.Username, true
+	}
+	if c := change.Contribution; c != nil {
+		values["source"], values["contributionKey"], values["providerName"], values["contributionToken"] = "contribution", c.Key, c.ProviderName, c.RevokeToken
 	}
 	if change.Note != nil {
 		values["note"] = *change.Note

@@ -73,10 +73,11 @@ type Lyrics struct {
 }
 
 type Result struct {
-	Items  []Item
-	Link   Link
-	Lyrics Lyrics
-	Image  string
+	PlaybackCookie string `json:"-"`
+	Items          []Item
+	Link           Link
+	Lyrics         Lyrics
+	Image          string
 }
 
 type Provider interface {

@@ -31,14 +31,19 @@ type Audio interface {
 }
 
 type Options struct {
-	Verifier   *auth.Verifier
-	Sources    map[string]Source
-	Audio      Audio
-	Legacy     *legacy.Backend
-	Admin      http.Handler
-	PublicBase *url.URL
-	Timeout    time.Duration
-	Logger     *slog.Logger
+	Observe        func(RequestObservation)
+	AdminPage      func(string) bool
+	LoudnessURL    func() string
+	LoudnessClient *http.Client
+	Contributions  func(http.ResponseWriter, *http.Request, []byte)
+	Verifier       *auth.Verifier
+	Sources        map[string]Source
+	Audio          Audio
+	Legacy         *legacy.Backend
+	Admin          http.Handler
+	PublicBase     *url.URL
+	Timeout        time.Duration
+	Logger         *slog.Logger
 }
 
 type Server struct{ Options }
@@ -48,8 +53,13 @@ func New(options Options) *Server { return &Server{options} }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if s.Admin != nil && s.AdminPage != nil && r.Method == http.MethodGet && s.AdminPage(path) {
+		s.Admin.ServeHTTP(w, r)
+		return
+	}
+
 	if s.Admin != nil && (path == "/admin" || strings.HasPrefix(path, "/admin/")) &&
-		path != "/admin/openmusic" && path != "/admin/fm" {
+		path != "/admin/openmusic" && path != "/admin/fm" && !contributionPath(path) {
 		s.Admin.ServeHTTP(w, r)
 		return
 	}
@@ -93,7 +103,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonResponse(w, 200, map[string]any{"name": "OpenMusic Meting API Go", "api": "/api", "platforms": slices.Sorted(maps.Keys(s.Sources))})
-	case "/api", "/test", "/admin/openmusic", "/admin/fm", "/audio/qishui":
+	case "/api", "/test", "/admin/openmusic", "/admin/fm", "/audio/qishui", "/admin/contribute", "/admin/contributions", "/admin/contributions/revoke":
 		s.programmatic(w, r)
 	default:
 		fail(w, 404, "NOT_FOUND", "接口不存在")
@@ -114,10 +124,16 @@ func (s *Server) useNative(r *http.Request) bool {
 		req.Type != "url" && req.Type != "fm"
 }
 
+func contributionPath(path string) bool {
+	return path == "/admin/contribute" || path == "/admin/contributions" || path == "/admin/contributions/revoke"
+}
+
 func (s *Server) programmatic(w http.ResponseWriter, r *http.Request) {
+	w, finish := s.observe(w, r)
+	defer finish()
 	w.Header().Set("Cache-Control", "no-store, private")
 	path := r.URL.Path
-	write := path == "/admin/fm"
+	write := path == "/admin/fm" || path == "/admin/contribute" || path == "/admin/contributions/revoke"
 	if (write && r.Method != http.MethodPost) || (!write && r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		if write {
 			w.Header().Set("Allow", "POST")
@@ -186,6 +202,12 @@ func (s *Server) programmatic(w http.ResponseWriter, r *http.Request) {
 		s.Audio.ServeHTTP(w, r)
 	case "/admin/fm":
 		s.roomFM(w, r, body)
+	case "/admin/contribute", "/admin/contributions", "/admin/contributions/revoke":
+		if s.Contributions == nil {
+			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "共享账号没有可用的数据目录")
+			return
+		}
+		s.Contributions(w, r, body)
 	case "/api", "/admin/openmusic":
 		s.lookup(w, r, cookie)
 	}
@@ -248,17 +270,14 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request, cookie string) {
 		s.upstreamError(w, r.URL.Path, req.Platform, err)
 		return
 	}
-	if req.Platform == "qishui" && req.Type == "url" && result.Link.PlayAuth != "" {
-		if s.Audio == nil {
-			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "汽水音频服务未配置")
-			return
-		}
-		q, err := s.Audio.Issue(result.Link)
-		if err != nil {
+	if req.Type == "url" && result.Link.URL != "" {
+		if err := s.wrapMedia(r, req.Platform, &result.Link); err != nil {
 			s.upstreamError(w, r.URL.Path, req.Platform, err)
 			return
 		}
-		result.Link.URL = strings.TrimSuffix(s.apiBase(r), "/api") + "/audio/qishui?" + q.Encode()
+		if !room && !req.Redirect {
+			s.augmentLoudness(r, source.Provider, req, &result)
+		}
 	}
 	if room && !(req.Type == "lrc" && req.Format == "json") {
 		writeRoom(w, req.Type, result)

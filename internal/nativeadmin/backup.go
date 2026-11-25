@@ -93,7 +93,7 @@ func (a *Admin) backup() error {
 	defer os.RemoveAll(stage)
 	for _, name := range backupFiles {
 		if err := copyBackupFile(filepath.Join(a.dataDir, name), filepath.Join(stage, name),
-			name == "cookies.json" || name == "users.json"); err != nil {
+			name == "users.json"); err != nil {
 			return fmt.Errorf("copy %s: %w", name, err)
 		}
 	}

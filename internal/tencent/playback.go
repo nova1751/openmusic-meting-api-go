@@ -106,9 +106,10 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 			Req  struct {
 				Code int `json:"code"`
 				Data struct {
-					RetCode int      `json:"retcode"`
-					SIP     []string `json:"sip"`
-					Info    []struct {
+					RetCode  int      `json:"retcode"`
+					ValidURL string   `json:"validUrl"`
+					SIP      []string `json:"sip"`
+					Info     []struct {
 						PURL   string `json:"purl"`
 						Result int    `json:"result"`
 					} `json:"midurlinfo"`
@@ -122,16 +123,21 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 			lastErr = err
 			continue
 		}
-		if result.Code == 104009 || result.Req.Code == 104009 || result.Req.Data.RetCode == 104009 {
+		verification := result.Code == 104009 || result.Req.Code == 104009 || result.Req.Data.RetCode == 104009
+		infoExists := len(result.Req.Data.Info) > 0
+		missing := !infoExists
+		if infoExists {
+			detail := result.Req.Data.Info[0]
+			verification = verification || detail.Result == 104009
+			missing = detail.PURL == "" || detail.Result != 0
+		}
+		if (verification || missing) && c.rememberChallenge(req.Cookie, req.ID, result.Req.Data.ValidURL) || verification {
 			return music.Result{}, music.ErrVerificationRequired
 		}
-		if result.Code != 0 || result.Req.Code != 0 || len(result.Req.Data.Info) == 0 {
+		if result.Code != 0 || result.Req.Code != 0 || !infoExists {
 			continue
 		}
 		info := result.Req.Data.Info[0]
-		if info.Result == 104009 {
-			return music.Result{}, music.ErrVerificationRequired
-		}
 		if info.Result != 0 || info.PURL == "" {
 			continue
 		}
@@ -146,6 +152,7 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 			}
 			address := base.ResolveReference(reference).String()
 			if c.playable(ctx, address) {
+				c.clearChallenge(req.Cookie)
 				return music.Result{Link: music.Link{URL: address, Quality: level.label}}, nil
 			}
 		}

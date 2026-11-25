@@ -65,4 +65,41 @@ func TestMigratedLoginAndTokenLifecycle(t *testing.T) {
 	if removed.Code != 200 || verifier.Verify(req, nil) != auth.Required {
 		t.Fatal("deleted token was not revoked")
 	}
+	createdUser := call(http.MethodPost, "/admin/users", `{"username":"fixture-user","password":"local-user-password","role":"user"}`)
+	if createdUser.Code != 200 {
+		t.Fatalf("cannot create user: %d %s", createdUser.Code, createdUser.Body)
+	}
+	removedAdmin := call(http.MethodPut, "/admin/users/admin", `{"role":"user"}`)
+	if removedAdmin.Code != 400 {
+		t.Fatalf("last admin could be removed: %d", removedAdmin.Code)
+	}
+	adminSession, adminCSRF := session, csrf
+	session = nil
+	userLogin := call(http.MethodPost, "/admin/api/login", `{"username":"fixture-user","password":"local-user-password"}`)
+	if userLogin.Code != 200 || json.Unmarshal(userLogin.Body.Bytes(), &loginData) != nil {
+		t.Fatalf("user login failed: %d", userLogin.Code)
+	}
+	csrf, session = loginData.CSRF, userLogin.Result().Cookies()[0]
+	if got := call(http.MethodGet, "/admin/tokens", ""); got.Code != 403 {
+		t.Fatalf("user may access privileged tokens: %d", got.Code)
+	}
+	if got := call(http.MethodPut, "/admin/profile", `{"role":"admin"}`); got.Code != 400 {
+		t.Fatalf("user may change role: %d", got.Code)
+	}
+	if got := call(http.MethodPut, "/admin/profile", `{"newUsername":"renamed-user","oldPassword":"local-user-password"}`); got.Code != 200 {
+		t.Fatalf("user rename failed: %d", got.Code)
+	}
+	if got := call(http.MethodGet, "/admin/api/session", ""); got.Code != 401 {
+		t.Fatalf("old session still valid after rename: %d", got.Code)
+	}
+	session = nil
+	if got := call(http.MethodPost, "/admin/api/login", `{"username":"renamed-user","password":"local-user-password"}`); got.Code != 200 {
+		t.Fatalf("renamed user cannot log in: %d", got.Code)
+	}
+	session, csrf = adminSession, adminCSRF
+	if got := call(http.MethodGet, "/admin/users", ""); got.Code != 200 ||
+		!strings.Contains(got.Body.String(), "renamed-user") || strings.Contains(got.Body.String(), "scrypt") {
+		t.Fatalf("unexpected user listing: %d %s", got.Code, got.Body)
+	}
+
 }

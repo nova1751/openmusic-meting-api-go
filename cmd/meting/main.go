@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -88,10 +89,25 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	audioClient := upstreamClient(60*time.Second, true)
 	defer audioClient.CloseIdleConnections()
+	loudnessURL := func() string {
+		if cfg.NodeDataDir != "" {
+			if settings, err := migrate.Config(cfg.NodeDataDir); err == nil && strings.TrimSpace(settings.LoudnessServiceURL) != "" {
+				return settings.LoudnessServiceURL
+			}
+		}
+		return strings.TrimSpace(os.Getenv("LOUDNESS_SERVICE_URL"))
+	}
+	media := qishui.NewAudio(audioClient)
+	if cfg.NodeDataDir != "" {
+		if err := media.EnableDiskCache(filepath.Join(cfg.NodeDataDir, "go-qishui-audio-cache")); err != nil {
+			logger.Warn("Qishui media disk cache could not be enabled")
+		}
+	}
 	options := httpapi.Options{
-		Verifier:   auth.New(cfg.Token, cfg.RequireAssertion),
+		Verifier:    auth.New(cfg.Token, cfg.RequireAssertion),
+		LoudnessURL: loudnessURL, LoudnessClient: client,
 		Sources:    map[string]httpapi.Source{},
-		Audio:      qishui.NewAudio(audioClient),
+		Audio:      media,
 		PublicBase: cfg.PublicBase,
 		Timeout:    cfg.RequestTimeout, Logger: logger,
 	}
@@ -130,6 +146,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 			return errors.New("native admin requires a loopback API listener")
 		}
+		if err := nativeadmin.Initialize(cfg.NodeDataDir, os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD")); err != nil {
+			return fmt.Errorf("initialize native administrator: %w", err)
+		}
+		if err := migrate.InitializeCookieKey(cfg.NodeDataDir, cfg.CookieKeyFile, cfg.CookieKeyValue); err != nil {
+			return fmt.Errorf("initialize account encryption: %w", err)
+		}
 		var qishuiQR *qishui.QRBrowser
 		if cfg.QishuiAssetsDir != "" {
 			qishuiQR, err = qishui.NewQRBrowser(ctx, cfg.QishuiAssetsDir, cfg.QishuiChromiumPath)
@@ -143,7 +165,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("initialize native admin: %w", err)
 		}
+		nativeManager.SetQQVerification(tencent.NewVerificationBrowser(ctx, cfg.QishuiChromiumPath))
 		options.Admin = nativeManager
+		options.Observe = nativeManager.Observe
+		options.AdminPage = nativeManager.PagePath
+		options.Contributions = nativeManager.Contributions
 	}
 	if cfg.LegacyURL == nil && cfg.NodeDataDir != "" {
 		accountLoader := func(platform string) func() ([]music.Account, error) {
@@ -207,6 +233,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	logger.Info("server listening", "address", listener.Addr().String(), "mode", mode, "version", version)
 	if nativeManager != nil {
 		go nativeManager.RunBackups(ctx, logger)
+		go nativeManager.RunMonitor(ctx, logger)
+		go nativeManager.RunLogFlush(ctx)
 	}
 	result := make(chan error, len(servers))
 	for i := range servers {
@@ -229,6 +257,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 				runErr = fmt.Errorf("shutdown: %w", err)
 			}
 		}
+	}
+	if nativeManager != nil {
+		nativeManager.FlushLogs()
 	}
 	return runErr
 }

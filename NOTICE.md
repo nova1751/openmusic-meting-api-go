@@ -34,3 +34,8 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## Go DES tables for QRC
+
+The QQ lyric decoder uses DES tables from the Go standard library. The
+corresponding BSD license is in [internal/tencent/qrc/LICENSE](./internal/tencent/qrc/LICENSE).

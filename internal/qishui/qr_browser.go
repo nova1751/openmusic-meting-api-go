@@ -25,6 +25,7 @@ import (
 const passportAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) SodaMusic/3.2.1 Chrome/136.0.7103.59 Electron/36.4.0 Safari/537.36"
 
 type QRBrowser struct {
+	assets      map[string][]byte
 	parent      context.Context
 	address     string
 	executable  string
@@ -71,7 +72,7 @@ func NewQRBrowser(ctx context.Context, assetsDir, executable string) (*QRBrowser
 	})}
 	go func() { _ = server.Serve(listener) }()
 	context.AfterFunc(ctx, func() { _ = server.Close() })
-	return &QRBrowser{parent: ctx, address: "http://" + listener.Addr().String() + "/security_host.html",
+	return &QRBrowser{assets: assets, parent: ctx, address: "http://" + listener.Addr().String() + "/security_host.html",
 		executable: executable, localScript: base64.StdEncoding.EncodeToString(assets["/bdms.js"]), slots: make(chan struct{}, 2)}, nil
 }
 
@@ -131,9 +132,10 @@ type passportResponse struct {
 	Status      int    `json:"status"`
 	Body        string `json:"body"`
 	ResponseURL string `json:"responseURL"`
+	Headers     string `json:"headers"`
 }
 
-func (q *QRSession) browserRequest(ctx context.Context, input passportRequest) (passportResponse, []*http.Cookie, error) {
+func (q *QRSession) browserRequest(ctx context.Context, input passportRequest, requireSignature bool) (passportResponse, []*http.Cookie, error) {
 	params, err := json.Marshal(input)
 	if err != nil {
 		return passportResponse{}, nil, err
@@ -168,7 +170,7 @@ func (q *QRSession) browserRequest(ctx context.Context, input passportRequest) (
 		}),
 	)
 	signed, parseErr := url.Parse(response.ResponseURL)
-	if err == nil && (response.Status < 200 || response.Status >= 400 || parseErr != nil || signed.Scheme != "https" ||
+	if err == nil && requireSignature && (response.Status < 200 || response.Status >= 400 || parseErr != nil || signed.Scheme != "https" ||
 		signed.Hostname() != "api.qishui.com" || len(signed.Query().Get("a_bogus")) != 44) {
 		err = errors.New("Qishui security SDK did not return a valid signed response")
 	}

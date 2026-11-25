@@ -239,3 +239,36 @@ func SetTwoFactor(dataDir, username, secret string, enabled bool) error {
 	delete(user, "twoFactorTempSecret")
 	return atomicJSON(path, users)
 }
+
+func ReadLogs(dataDir, name string) ([]json.RawMessage, error) {
+	var items []json.RawMessage
+	err := readJSON(filepath.Join(dataDir, name), &items)
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil
+	}
+	return items, err
+}
+
+func AppendMonitorLog(dataDir string, entry map[string]any) error {
+	items, err := ReadLogs(dataDir, "monitor_logs.json")
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	items = append(items, payload)
+	items = items[max(0, len(items)-500):]
+	return atomicJSON(filepath.Join(dataDir, "monitor_logs.json"), items)
+}
+
+func AppendLogs(dataDir, name string, newEntries []json.RawMessage) error {
+	items, err := ReadLogs(dataDir, name)
+	if err != nil {
+		return err
+	}
+	items = append(items, newEntries...)
+	items = items[max(0, len(items)-1000):]
+	return atomicJSON(filepath.Join(dataDir, name), items)
+}

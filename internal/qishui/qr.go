@@ -16,6 +16,7 @@ import (
 )
 
 type QRSession struct {
+	decision                                                         object
 	tab                                                              context.Context
 	close                                                            func()
 	created                                                          time.Time
@@ -26,9 +27,8 @@ type QRSession struct {
 func (q *QRSession) URL() string { return q.scanURL }
 func (q *QRSession) Close()      { q.close() }
 
-func (q *QRSession) passport(ctx context.Context, method, path string, query, form url.Values) (object, error) {
-	trace := qrHex(4)
-	params := url.Values{
+func (q *QRSession) generalParams(trace string) url.Values {
+	return url.Values{
 		"passport_jssdk_version": {"2.4.13"}, "passport_jssdk_type": {"normal"}, "is_from_ttaccountsdk": {"1"},
 		"aid": {"386088"}, "language": {"zh"}, "account_sdk_source": {"web"}, "p_js_v": {"2.4.13"}, "p_js_t": {"pro"},
 		"p_zt": {"3.3.5"}, "p_ver": {"1.0.29"}, "request_host": {"app%3A%2F%2Fresources"}, "p_bd": {"1.0.0.41"},
@@ -36,6 +36,11 @@ func (q *QRSession) passport(ctx context.Context, method, path string, query, fo
 		"device_id": {q.device}, "install_id": {q.install}, "did": {q.device}, "iid": {q.install},
 		"device_platform": {"PC"}, "version_code": {"3.5.2"}, "account_sdk_source_info": {"00"}, "msToken": {q.msToken},
 	}
+}
+
+func (q *QRSession) passport(ctx context.Context, method, path string, query, form url.Values) (object, error) {
+	trace := qrHex(4)
+	params := q.generalParams(trace)
 	maps.Copy(params, query)
 	request := passportRequest{Method: method, URL: pcHost + path + "?" + params.Encode(), Timeout: 12000, Headers: map[string]string{
 		"Accept": "application/json, text/javascript", "x-tt-passport-verify-portrait": q.portrait, "x-tt-passport-trace-id": trace,
@@ -47,7 +52,7 @@ func (q *QRSession) passport(ctx context.Context, method, path string, query, fo
 		request.Headers["Content-Type"] = "application/x-www-form-urlencoded"
 		request.Headers["x-ss-stub"] = strings.ToUpper(hex.EncodeToString(sum[:]))
 	}
-	reply, cookies, err := q.browserRequest(ctx, request)
+	reply, cookies, err := q.browserRequest(ctx, request, true)
 	if err != nil {
 		return nil, err
 	}
@@ -118,17 +123,27 @@ func (q *QRSession) Poll(ctx context.Context) (status, cookie string, err error)
 	if time.Now().Before(q.next) {
 		return q.last, "", nil
 	}
-	payload, err := q.passport(ctx, "POST", "/passport/web/check_qrconnect/", nil, url.Values{
-		"need_logo": {"false"}, "need_short_url": {"false"}, "is_frontier": {"true"}, "token": {q.token}, "is_new_login": {"1"}, "next": {pcHost},
-	})
+	payload, err := q.check(ctx, nil, nil)
 	if err != nil {
 		return "", "", err
 	}
 	q.next = time.Now().Add(2500 * time.Millisecond)
+	return q.applyPoll(payload)
+}
+
+func (q *QRSession) check(ctx context.Context, query, updates url.Values) (object, error) {
+	form := url.Values{"need_logo": {"false"}, "need_short_url": {"false"}, "is_frontier": {"true"},
+		"token": {q.token}, "is_new_login": {"1"}, "next": {pcHost}}
+	maps.Copy(form, updates)
+	return q.passport(ctx, "POST", "/passport/web/check_qrconnect/", query, form)
+}
+
+func (q *QRSession) applyPoll(payload object) (status, cookie string, err error) {
 	data := payload.Object("data")
 	state := strings.ToLower(data.Text("status"))
 	switch data.Int("error_code") {
 	case 2046:
+		q.decision = data
 		q.last = "second_verify"
 		return q.last, "", nil
 	case 2:

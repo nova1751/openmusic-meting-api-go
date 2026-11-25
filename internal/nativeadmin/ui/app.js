@@ -1,6 +1,7 @@
 let csrf = '';
 let timer;
 let qrRun = 0;
+let currentVerifyKey = '';
 const $ = id => document.getElementById(id);
 const notice = text => { $('notice').textContent = text; };
 
@@ -18,17 +19,36 @@ async function api(path, body, method = "POST") {
   return result;
 }
 
+function closeQRVerification() {
+  currentVerifyKey = '';
+  $('qr-verify').hidden = true;
+  $('qr-verify').removeAttribute('src');
+}
+
+window.addEventListener('message', event => {
+  if (event.origin !== 'null' || event.source !== $('qr-verify').contentWindow ||
+      event.data?.type !== 'qishui-second-verify-complete' || event.data?.key !== currentVerifyKey) return;
+  closeQRVerification();
+  poll(qrRun);
+});
+
 function showLogin() {
+  closeQRVerification();
+  resetQQWindow();
   clearTimeout(timer);
   qrRun++;
   csrf = '';
+  $('new-token').textContent = '';
+  $('new-token').hidden = true;
+  $('webhook-form').reset();
   $('dashboard').hidden = true;
   $('login').hidden = false;
   $('qr').hidden = true;
 }
 
 async function loadAccounts() {
-  const result = await api('accounts');
+  const [result, pending] = await Promise.all([api('accounts'), api('/admin/cookies/tencent-verifications')]);
+  const challenges = new Set(pending.data.map(account => account.id));
   const list = $('accounts');
   list.replaceChildren();
   for (const account of result.accounts) {
@@ -74,6 +94,13 @@ async function loadAccounts() {
       });
       item.append(renew);
     }
+    if (challenges.has(account.id)) {
+      const challenge = document.createElement('button');
+      challenge.type = 'button';
+      challenge.textContent = '打开 QQ 验证';
+      challenge.addEventListener('click', () => openQQWindow(account.id).catch(error => notice(error.message)));
+      item.append(challenge);
+    }
     item.append(remove);
     list.append(item);
   }
@@ -91,11 +118,12 @@ $('account-form').addEventListener('submit', async event => {
   } catch (error) { notice(error.message); }
 });
 
-async function showDashboard() {
+async function showDashboard(role) {
   $('login').hidden = true;
   $('dashboard').hidden = false;
   notice('');
-  await Promise.all([loadAccounts(), loadTwoFactor()]);
+  $('admin-sources').hidden = role !== 'admin';
+  await Promise.all(role === 'admin' ? [loadAccounts(), loadOperations(), loadTwoFactor()] : [loadTwoFactor()]);
 }
 
 $('login-form').addEventListener('submit', async event => {
@@ -106,7 +134,7 @@ $('login-form').addEventListener('submit', async event => {
     if (result.require2FA) { $('code-label').hidden = false; notice('请输入双重验证码'); return; }
     csrf = result.csrf;
     event.currentTarget.reset();
-    await showDashboard();
+    await showDashboard(result.role);
   } catch (error) { notice(error.message); }
 });
 
@@ -168,7 +196,12 @@ async function poll(run) {
       $('qr-status').textContent = '登录成功，账号已保存。';
       await loadAccounts();
     } else if (result.status === 'second_verify') {
-      $('qr-status').textContent = '汽水要求二次验证。请完成官方验证后重新扫码。';
+      $('qr-status').textContent = '请完成汽水音乐二次验证。';
+      if (result.verifyKey && result.verifyKey !== currentVerifyKey) {
+        currentVerifyKey = result.verifyKey;
+        $('qr-verify').src = '/admin/qr/qishui/security/security_host.html?key=' + encodeURIComponent(currentVerifyKey);
+        $('qr-verify').hidden = false;
+      }
     } else if (result.status === 'error') {
       $('qr-status').textContent = '扫码连接或登录失败，请重试。';
     } else if (result.status === 'expired') {
@@ -183,6 +216,7 @@ async function poll(run) {
 $('create-qr').addEventListener('click', async () => {
   clearTimeout(timer);
   const run = ++qrRun;
+  closeQRVerification();
   $('create-qr').disabled = true;
   try {
     await api('qr/create', { platform: $('qr-platform').value });
@@ -194,4 +228,175 @@ $('create-qr').addEventListener('click', async () => {
   finally { $('create-qr').disabled = false; }
 });
 
-api('session').then(result => { csrf = result.csrf; return showDashboard(); }).catch(showLogin);
+api('session').then(result => { csrf = result.csrf; return showDashboard(result.role); }).catch(showLogin);
+
+let qqAccount = '';
+let qqFrameTimer;
+let qqDrag = false;
+let qqPointerChain = Promise.resolve();
+let qqLastMove = 0;
+const frame = $('qq-frame');
+const qqPath = action => '/admin/cookies/' + encodeURIComponent(qqAccount) + '/' + action;
+
+function pollQQFrame() {
+  if (!qqAccount) return;
+  frame.src = qqPath('verification/frame') + '?t=' + Date.now();
+  clearTimeout(qqFrameTimer);
+  qqFrameTimer = setTimeout(pollQQFrame, 400);
+}
+
+function resetQQWindow() {
+  clearTimeout(qqFrameTimer);
+  qqAccount = '';
+  qqDrag = false;
+  frame.removeAttribute('src');
+  $('qq-verify').hidden = true;
+}
+
+async function openQQWindow(id) {
+  qqAccount = id;
+  try {
+    await api(qqPath('verification/start'), {});
+    $('qq-verify').hidden = false;
+    pollQQFrame();
+  } catch (error) { resetQQWindow(); throw error; }
+}
+
+$('qq-close').addEventListener('click', async () => {
+  try { await api(qqPath('verification/close'), {}); } catch (_) {}
+  resetQQWindow();
+});
+
+$('qq-retry').addEventListener('click', async () => {
+  try {
+    const result = await api(qqPath('retry-play'), {});
+    if (!result.success) { notice(result.error); return; }
+    resetQQWindow();
+    await loadAccounts();
+    notice('QQ 音乐播放链接已恢复');
+  } catch (error) { notice(error.message); }
+});
+
+for (const type of ['down', 'move', 'up', 'cancel']) {
+  frame.addEventListener('pointer' + type, event => {
+    if (!qqAccount || (!qqDrag && type !== 'down')) return;
+    if (type === 'move' && Date.now() - qqLastMove < 50) return;
+    qqLastMove = Date.now();
+    if (type === 'down') { qqDrag = true; frame.setPointerCapture(event.pointerId); }
+    if (type === 'up' || type === 'cancel') qqDrag = false;
+    const bounds = frame.getBoundingClientRect();
+    const coordinates = { type: type === 'cancel' ? 'up' : type,
+      x: (event.clientX - bounds.left) * 400 / bounds.width,
+      y: (event.clientY - bounds.top) * 720 / bounds.height };
+    const endpoint = qqPath('verification/pointer');
+    qqPointerChain = qqPointerChain.then(() => api(endpoint, coordinates)).catch(error => notice(error.message));
+  });
+}
+
+function listControl(list, text, label, action) {
+  const item = document.createElement('li');
+  const description = document.createElement('span');
+  description.textContent = text;
+  if (label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', () => action().catch(error => notice(error.message)));
+    item.append(description, button);
+  } else {
+    item.append(description);
+  }
+  list.append(item);
+}
+
+async function loadOperations() {
+  const [tokens, users, monitor, webhook, logs] = await Promise.all([
+    api('/admin/tokens'), api('/admin/users'), api('/admin/monitor'), api('/admin/webhook'), api('/admin/monitor/logs?limit=12')
+  ]);
+  $('tokens').replaceChildren();
+  for (const token of tokens.data) {
+    listControl($('tokens'), token.name, '撤销', async () => {
+      if (!confirm('撤销此 Token？')) return;
+      await api('/admin/tokens/' + encodeURIComponent(token.id), {}, 'DELETE');
+      await loadOperations();
+    });
+  }
+  $('users').replaceChildren();
+  for (const user of users.data) {
+    listControl($('users'), user.username + ' · ' + (user.role === 'admin' ? '管理员' : '普通用户'), '删除', async () => {
+      if (!confirm('删除此后台用户？')) return;
+      await api('/admin/users/' + encodeURIComponent(user.username), {}, 'DELETE');
+      await loadOperations();
+    });
+  }
+  $('monitor-form').elements.enabled.checked = monitor.data.enabled;
+  $('monitor-form').elements.interval.value = monitor.data.interval;
+  $('webhook-form').elements.enabled.checked = webhook.data.enabled;
+  $('webhook-form').elements.url.value = webhook.data.url;
+  $('webhook-form').elements.contentType.value = webhook.data.contentType;
+  $('webhook-form').elements.headers.value = JSON.stringify(webhook.data.headers || {});
+  $('webhook-form').elements.bodyTemplate.value = webhook.data.bodyTemplate || '';
+  $('monitor-logs').replaceChildren();
+  for (const entry of logs.data) {
+    const info = [new Date(entry.timestamp).toLocaleString(), entry.type, entry.platform, entry.note].filter(Boolean);
+    listControl($('monitor-logs'), info.join(' · '));
+  }
+}
+
+$('token-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const fields = new FormData(event.currentTarget);
+  try {
+    const result = await api('/admin/tokens', { name: fields.get('name') });
+    $('new-token').textContent = result.data.token;
+    $('new-token').hidden = false;
+    $('token-form').reset();
+    await loadOperations();
+  } catch (error) { notice(error.message); }
+});
+
+$('user-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await api('/admin/users', Object.fromEntries(new FormData(event.currentTarget)));
+    $('user-form').reset();
+    await loadOperations();
+  } catch (error) { notice(error.message); }
+});
+
+$('monitor-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    await api('/admin/monitor', { enabled: form.elements.enabled.checked, interval: Number(form.elements.interval.value) }, 'PUT');
+    notice('监测设置已保存');
+  } catch (error) { notice(error.message); }
+});
+
+$('monitor-now').addEventListener('click', async event => {
+  event.target.disabled = true;
+  try {
+    await api('/admin/monitor/check', {});
+    await loadOperations();
+    notice('账号检查已完成');
+  } catch (error) { notice(error.message); }
+  finally { event.target.disabled = false; }
+});
+
+$('webhook-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fields = Object.fromEntries(new FormData(form));
+  try {
+    await api('/admin/webhook', { ...fields, enabled: form.elements.enabled.checked,
+      headers: JSON.parse(fields.headers || '{}') }, 'PUT');
+    notice('Webhook 设置已保存');
+  } catch (error) { notice(error.message); }
+});
+
+$('webhook-test').addEventListener('click', async event => {
+  event.target.disabled = true;
+  try { await api('/admin/webhook/test', {}); notice('Webhook 测试消息已发送'); }
+  catch (error) { notice(error.message); }
+  finally { event.target.disabled = false; }
+});

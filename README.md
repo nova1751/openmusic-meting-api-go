@@ -13,7 +13,7 @@ A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting
 | Private room music and FM | Go | Node.js |
 | Qishui audio source mode, decryption and range requests | Go | Node.js |
 | Cookie management, QR login, API tokens, 2FA and snapshots | Go admin; Qishui QR needs Chromium and SDK assets | Original admin panel |
-| Interactive verification, users, monitoring and webhooks | Compatibility mode | Node.js |
+| Interactive verification, user roles, contributions, monitoring and webhooks | Go; verification requires Chromium and an active provider challenge | Node.js |
 | OpenMusic token and request signing | Go | Existing Node.js token store and signing settings |
 | Liveness and readiness endpoints | `/livez` and `/readyz` | `/livez` and `/readyz` |
 
@@ -108,10 +108,12 @@ signer configured in the old data directory or in QISHUI_SIGNER_URL.
 | --- | --- | --- |
 | `PORT` | `3000` | Port used when `LISTEN_ADDR` is unset |
 | `LISTEN_ADDR` | `127.0.0.1:$PORT` | Full listen address. The container uses `:3000`. |
-| `METING_API_TOKEN` | Required in standalone mode, or import a named token | API token with at least 32 non-whitespace characters |
+| `METING_API_TOKEN` | Required in standalone mode, or import a named token | API token with at least 32 non-whitespace characters. With an imported data directory and no named token, stored tokens can authenticate. |
 | `OPENMUSIC_AUTH_ENABLED` | `true` | Require signed assertions in standalone mode. Bearer authentication still applies when set to `false`. |
 | `NETEASE_ACCOUNTS_FILE` | Unset | Standalone account JSON file loaded at startup |
-| `TENCENT_ACCOUNTS_FILE` | Unset | Standalone QQ account JSON file loaded at startup |
+| `TENCENT_ACCOUNTS_FILE`, `KUGOU_ACCOUNTS_FILE`, `QISHUI_ACCOUNTS_FILE` | Unset | Additional standalone account files |
+| `QISHUI_SIGNER_URL`, `LOUDNESS_SERVICE_URL` | Unset | Optional service addresses. Existing settings take precedence. |
+| `QISHUI_SECURITY_ASSETS_DIR`, `QISHUI_CHROMIUM_PATH` | Unset | Existing SDK assets for Qishui QR login, and the optional Chromium executable |
 | `METING_NODE_DATA_DIR` | Unset | Read existing encrypted Node accounts; mutually exclusive with standalone account files |
 | `METING_COOKIE_KEY_FILE` | Key inside Node data directory | Existing cookie encryption key file |
 | `METING_COOKIE_ENCRYPTION_KEY` | Unset | Existing environment-provided key; takes precedence over the key file |
@@ -127,7 +129,8 @@ signer configured in the old data directory or in QISHUI_SIGNER_URL.
 | `LEGACY_BRIDGE_KEY` | Unset | Shared internal key for the Go service and the Node.js bridge |
 
 Native admin requires an HTTPS public origin, a loopback listener and a copy of the
-original data with an existing administrator. Go supports legacy and scrypt Node
+original data with an existing administrator. For a fresh instance, set ADMIN_PASSWORD
+and optionally ADMIN_USERNAME. Go supports legacy and scrypt Node
 passwords. QQ account renewal requires saved device and refresh credentials.
 See the migration guide for Chromium and the Qishui security assets.
 

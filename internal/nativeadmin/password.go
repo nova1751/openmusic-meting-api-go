@@ -24,6 +24,10 @@ func (a *Admin) setPassword(username, password string) error {
 	if records == nil {
 		return errors.New("invalid administrator password data")
 	}
+	entry, err := a.userEntry(username)
+	if err != nil {
+		return err
+	}
 	var salt [16]byte
 	if _, err := rand.Read(salt[:]); err != nil {
 		return err
@@ -32,7 +36,7 @@ func (a *Admin) setPassword(username, password string) error {
 	if err != nil {
 		return err
 	}
-	records[username] = passwordRecord{Salt: base64.RawURLEncoding.EncodeToString(salt[:]),
+	records[entry.passwordKey(username)] = passwordRecord{Salt: base64.RawURLEncoding.EncodeToString(salt[:]),
 		Hash: base64.RawURLEncoding.EncodeToString(derived), Iterations: passwordIterations}
 	return writePasswords(path, records)
 }

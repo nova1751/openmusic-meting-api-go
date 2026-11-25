@@ -87,6 +87,7 @@ func (s *session) closeQR() {
 }
 
 func (s *session) clearQR() {
+	s.qishuiVerifyKey = ""
 	if s.qishuiQR != nil {
 		s.qishuiQR.Close()
 		s.qishuiQR = nil
@@ -98,6 +99,18 @@ func (s *session) clearQR() {
 }
 
 func (a *Admin) saveQR(w http.ResponseWriter, ctx context.Context, s *session, platform, note, status, cookie string) {
+	if platform == "qishui" && status == "second_verify" {
+		if s.qishuiVerifyKey == "" {
+			var err error
+			s.qishuiVerifyKey, err = secureRandom(32)
+			if err != nil {
+				reject(w, 503, "无法创建验证会话")
+				return
+			}
+		}
+		reply(w, 200, map[string]any{"success": true, "status": status, "verifyKey": s.qishuiVerifyKey})
+		return
+	}
 	if status == "confirmed" {
 		profile, err := a.checkAccount(ctx, platform, cookie)
 		if err != nil {

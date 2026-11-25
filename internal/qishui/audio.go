@@ -31,6 +31,7 @@ type playToken struct {
 }
 
 type audioEntry struct {
+	cachedAt    string
 	data        []byte
 	contentType string
 	last        time.Time
@@ -43,6 +44,7 @@ type loading struct {
 }
 
 type Audio struct {
+	disk       *diskCache
 	client     *http.Client
 	mu         sync.Mutex
 	tokens     map[string]playToken
@@ -144,6 +146,7 @@ func (a *Audio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", audio.contentType)
 	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Qishui-Cache", audio.cachedAt)
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(audio.data))
 }
 
@@ -160,6 +163,7 @@ func (a *Audio) load(ctx context.Context, key [sha1.Size]byte, entry playToken) 
 		if now.Sub(cached.last) < cacheTTL {
 			cached.last = now
 			a.cache[key] = cached
+			cached.cachedAt = "memory"
 			a.mu.Unlock()
 			return cached, nil
 		}
@@ -191,7 +195,16 @@ func (a *Audio) fetch(key [sha1.Size]byte, entry playToken, work *loading) {
 	defer func() { <-a.slots }()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	data, mime, err := a.download(ctx, entry)
+	data, mime, hit := a.disk.read(key)
+	source := "disk"
+	var err error
+	if !hit {
+		source = "miss"
+		data, mime, err = a.download(ctx, entry)
+		if err == nil {
+			a.disk.write(key, data)
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	defer close(work.done)
@@ -200,7 +213,7 @@ func (a *Audio) fetch(key [sha1.Size]byte, entry playToken, work *loading) {
 	if err != nil {
 		return
 	}
-	work.entry = audioEntry{data: data, contentType: mime, last: time.Now()}
+	work.entry = audioEntry{data: data, contentType: mime, last: time.Now(), cachedAt: source}
 	for a.cacheBytes+len(data) > maxMemory && len(a.cache) > 0 {
 		var oldest [sha1.Size]byte
 		var before time.Time

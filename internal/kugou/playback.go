@@ -107,11 +107,19 @@ func (c *Client) play(ctx context.Context, req music.Request, hash string, album
 	if strings.EqualFold(providerhttp.CookieValue(req.Cookie, "KUGOU_API_PLATFORM", "kg_platform"), "standard") {
 		profile = standard
 	}
+	req.Cookie = c.cachedDevice(c.prepareDevice(req.Cookie), profile)
 	params := map[string]string{"album_id": "0", "area_code": "1", "hash": hash, "ssa_flag": "is_fromtrack", "version": "11430", "clientver": "11430",
 		"page_id": profile.pageID, "quality": q.wire, "album_audio_id": strconv.FormatUint(albumAudioID, 10),
 		"behavior": "play", "pid": profile.playerID, "cmd": "26", "pidversion": "3001", "cdnBackup": "1",
 		"IsFreePart": "0", "ppage_id": profile.playPages, "module": "", "key": digest(hash + profile.trackSalt + profile.appID + deviceMID(req.Cookie) + user)}
-	res, err := c.call(ctx, request{address: gateway + "/v5/url", router: "trackercdn.kugou.com", params: params, cookie: req.Cookie, profile: profile})
+	input := request{address: gateway + "/v5/url", router: "trackercdn.kugou.com", params: params, cookie: req.Cookie, profile: profile}
+	res, err := c.call(ctx, input)
+	if errors.Is(err, serviceError(20028)) && !validDFID(req.Cookie) {
+		if registered, registerErr := c.registerDevice(ctx, req.Cookie, profile); registerErr == nil {
+			req.Cookie, input.cookie = registered, registered
+			res, err = c.call(ctx, input)
+		}
+	}
 	if err == nil {
 		if link := playbackLink(audioInfo(res)); link.URL != "" {
 			return music.Result{Link: link}, nil

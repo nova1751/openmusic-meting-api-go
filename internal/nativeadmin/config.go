@@ -3,6 +3,8 @@ package nativeadmin
 import (
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 
 	"github.com/nova1751/openmusic-meting-api-go/internal/migrate"
@@ -36,7 +38,7 @@ func (a *Admin) configRoutes(w http.ResponseWriter, r *http.Request) {
 			field = "openmusicAuthEnabled"
 		}
 		err = migrate.WriteSetting(a.dataDir, field, *input.Enabled)
-	case "/qishui-signer":
+	case "/qishui-signer", "/loudness-service":
 		var input struct{ URL *string }
 		if decode(r, &input) != nil {
 			reject(w, 400, "无效的签名服务地址")
@@ -51,7 +53,23 @@ func (a *Admin) configRoutes(w http.ResponseWriter, r *http.Request) {
 			}
 			address = u.String()
 		}
-		err = migrate.WriteSetting(a.dataDir, "qishuiSignerUrl", address)
+		field := "qishuiSignerUrl"
+		if path == "/loudness-service" {
+			field = "loudnessServiceUrl"
+		}
+		err = migrate.WriteSetting(a.dataDir, field, address)
+	case "/admin-path":
+		var input struct{ AdminPath string }
+		if decode(r, &input) != nil {
+			reject(w, 400, "无效的后台路径")
+			return
+		}
+		name := strings.Trim(input.AdminPath, "/")
+		if !validAdminPath(name) {
+			reject(w, 400, "后台路径无效或与 API 冲突")
+			return
+		}
+		err = migrate.WriteSetting(a.dataDir, "adminPath", name)
 	case "/fm-priority":
 		var input struct {
 			Platform string
@@ -73,4 +91,31 @@ func (a *Admin) configRoutes(w http.ResponseWriter, r *http.Request) {
 	if !accountError(w, err) {
 		reply(w, 200, map[string]any{"success": true, "data": data})
 	}
+}
+
+var adminPathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,128}$`)
+
+func validAdminPath(path string) bool {
+	switch path {
+	case "api", "test", "audio", "livez", "readyz", "__meting_go":
+		return false
+	default:
+		return adminPathPattern.MatchString(path)
+	}
+}
+
+func (a *Admin) PagePath(path string) bool {
+	name := strings.Trim(path, "/")
+	if !validAdminPath(name) {
+		return false
+	}
+	cfg, err := migrate.Config(a.dataDir)
+	if err == nil && validAdminPath(cfg.AdminPath) {
+		return name == cfg.AdminPath
+	}
+	env := strings.Trim(os.Getenv("ADMIN_PATH"), "/")
+	if validAdminPath(env) {
+		return name == env
+	}
+	return name == "admin"
 }
