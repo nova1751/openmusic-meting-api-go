@@ -9,13 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.27.4'
           cache: false
-      - name: Check formatting
-        run: test -z "$(gofmt -l ./cmd ./internal)"
-      - run: go vet ./...
+      - name: Check changed Go packages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash ./scripts/check-incremental.sh "$BASE_SHA" "$GITHUB_SHA"
       - run: go test -race ./...
       - run: go build ./cmd/meting
       - run: node --check compat/bridge.mjs
