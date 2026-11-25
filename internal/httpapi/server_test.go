@@ -28,8 +28,8 @@ func (f lookupFunc) Lookup(ctx context.Context, req music.Request) (music.Result
 
 func options(lookup lookupFunc) Options {
 	base, _ := url.Parse("https://music.example/meting")
-	return Options{Verifier: auth.New(testToken, false), Provider: lookup,
-		Accounts: music.NewAccountPool(nil), PublicBase: base, Timeout: time.Second,
+	return Options{Verifier: auth.New(testToken, false),
+		Sources: map[string]Source{"netease": {Provider: lookup, Accounts: music.NewAccountPool(nil)}}, PublicBase: base, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
@@ -164,5 +164,25 @@ func TestMergeLRC(t *testing.T) {
 	got := mergeLRC("[00:02.05]来\n[00:01.001]归", "[00:02.050]come\n[00:01.005]later")
 	if got != "[00:01.001]归\n[00:02.050]来 (come)" {
 		t.Fatal(got)
+	}
+}
+
+func TestQishuiRoomFMExcludesPreviouslyPlayedTracks(t *testing.T) {
+	cfg := options(nil)
+	calls := 0
+	cfg.Sources["qishui"] = Source{Provider: lookupFunc(func(_ context.Context, req music.Request) (music.Result, error) {
+		calls++
+		if req.Platform != "qishui" || req.Cookie != "sessionid=fixture" || req.Type != "fm" || req.ID != "explore" {
+			t.Fatalf("unexpected request: %+v", req)
+		}
+		id := "123"
+		if calls == 2 {
+			id = "456"
+		}
+		return music.Result{Items: []music.Item{{ID: id}}}, nil
+	})}
+	got := request(t, New(cfg), http.MethodPost, "/admin/fm", `{"platform":"qishui","mode":"explore","cookie":"sessionid=fixture","excludeIds":[123]}`, true)
+	if got.Code != 200 || calls != 2 || !strings.Contains(got.Body.String(), `"id":"456"`) || strings.Contains(got.Body.String(), `"id":"123"`) {
+		t.Fatalf("unexpected filtered response: %d, %d calls, %s", got.Code, calls, got.Body)
 	}
 }

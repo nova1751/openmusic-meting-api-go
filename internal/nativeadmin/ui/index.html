@@ -24,11 +24,21 @@
       <div class="heading"><h2>音源账号</h2><button type="button" id="logout">退出登录</button></div>
       <p>账号凭据保存在服务器上，不会发送到此页面。</p>
       <ul id="accounts"></ul>
-      <button type="button" id="create-qr">网易云扫码登录</button>
+      <label>扫码平台 <select id="qr-platform"><option value="netease">网易云音乐</option><option value="tencent">QQ 音乐</option><option value="kugou">酷狗音乐</option><option value="qishui">汽水音乐</option></select></label>
+      <button type="button" id="create-qr">创建登录二维码</button>
+      <details>
+        <summary>手动添加音源账号</summary>
+        <form id="account-form">
+          <label>平台 <select name="platform"><option value="netease">网易云音乐</option><option value="tencent">QQ 音乐</option><option value="kugou">酷狗音乐</option><option value="qishui">汽水音乐</option></select></label>
+          <label>Cookie <input type="password" name="cookie" autocomplete="off" required></label>
+          <label>备注 <input name="note" maxlength="400"></label>
+          <button type="submit">验证并保存</button>
+        </form>
+      </details>
       <section id="qr" hidden>
-        <h2>网易云扫码登录</h2>
+        <h2>扫码登录</h2>
         <p id="qr-status" role="status" aria-live="polite"></p>
-        <img id="qr-image" alt="使用网易云音乐 App 扫描二维码" width="256" height="256">
+        <img id="qr-image" alt="使用所选音乐 App 扫描二维码" width="256" height="256">
       </section>
       <section>
         <h2>修改管理密码</h2>
@@ -56,7 +66,6 @@
           <button type="submit">关闭双重验证</button>
         </form>
       </section>
-      <p class="note">当前管理页面支持网易云账号；其他平台的完整管理功能仍需兼容服务。</p>
     </section>
   </main>
 </body>

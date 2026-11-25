@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 FROM node:24-alpine AS source
-ARG UPSTREAM_REVISION=fb9030ff2b8ab295c213f8542807c1a95e6cf540
+ARG UPSTREAM_REVISION=fb1d08dcf81ea1f63a75fb344f7a60b49492d9f5
 RUN apk add --no-cache git
 WORKDIR /app
 RUN git init \

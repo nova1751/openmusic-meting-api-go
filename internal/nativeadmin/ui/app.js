@@ -4,15 +4,15 @@ let qrRun = 0;
 const $ = id => document.getElementById(id);
 const notice = text => { $('notice').textContent = text; };
 
-async function api(path, body) {
+async function api(path, body, method = "POST") {
   const options = { credentials: 'same-origin', headers: {} };
   if (body !== undefined) {
-    options.method = 'POST';
+    options.method = method;
     options.headers['Content-Type'] = 'application/json';
     if (csrf) options.headers['X-CSRF-Token'] = csrf;
     options.body = JSON.stringify(body);
   }
-  const response = await fetch('/admin/api/' + path, options);
+  const response = await fetch(path.startsWith('/') ? path : '/admin/api/' + path, options);
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '请求失败');
   return result;
@@ -45,11 +45,51 @@ async function loadAccounts() {
       try { await api('accounts/active', { id: account.id, active: !account.isActive }); await loadAccounts(); }
       catch (error) { notice(error.message); button.disabled = false; }
     });
-    item.append(description, button);
+    const verify = document.createElement('button');
+    verify.type = 'button';
+    verify.textContent = '验证';
+    verify.addEventListener('click', async () => {
+      try { await api('/admin/cookies/' + encodeURIComponent(account.id) + '/verify', {}); await loadAccounts(); }
+      catch (error) { notice(error.message); }
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      if (!confirm('删除此音源账号？')) return;
+      try { await api('/admin/cookies/' + encodeURIComponent(account.id), {}, 'DELETE'); await loadAccounts(); }
+      catch (error) { notice(error.message); }
+    });
+    item.append(description, button, verify);
+    if (account.platform === 'tencent') {
+      const renew = document.createElement('button');
+      renew.type = 'button';
+      renew.textContent = '续期';
+      renew.addEventListener('click', async () => {
+        try {
+          const result = await api('/admin/cookies/' + encodeURIComponent(account.id) + '/refresh', {});
+          await loadAccounts();
+          notice(result.data.validated ? 'QQ 音乐账号已续期' : '新凭据已保存，请重新验证账号');
+        } catch (error) { notice(error.message); }
+      });
+      item.append(renew);
+    }
+    item.append(remove);
     list.append(item);
   }
   if (!result.accounts.length) list.textContent = '暂无账号';
 }
+
+$('account-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await api('/admin/cookies', { platform: form.get('platform'), cookie: form.get('cookie'), note: form.get('note') });
+    event.currentTarget.reset();
+    notice('音源账号已保存');
+    await loadAccounts();
+  } catch (error) { notice(error.message); }
+});
 
 async function showDashboard() {
   $('login').hidden = true;
@@ -127,10 +167,14 @@ async function poll(run) {
     if (result.status === 'confirmed') {
       $('qr-status').textContent = '登录成功，账号已保存。';
       await loadAccounts();
+    } else if (result.status === 'second_verify') {
+      $('qr-status').textContent = '汽水要求二次验证。请完成官方验证后重新扫码。';
+    } else if (result.status === 'error') {
+      $('qr-status').textContent = '扫码连接或登录失败，请重试。';
     } else if (result.status === 'expired') {
       $('qr-status').textContent = '二维码已过期，请重新生成。';
     } else {
-      $('qr-status').textContent = result.status === 'scanned' ? '已扫码，请在手机上确认。' : '请使用网易云音乐 App 扫码。';
+      $('qr-status').textContent = result.status === 'scanned' ? '已扫码，请在手机上确认。' : '请使用所选音乐 App 扫码。';
       timer = setTimeout(() => poll(run), 2500);
     }
   } catch (error) { if (run === qrRun) $('qr-status').textContent = error.message; }
@@ -141,9 +185,9 @@ $('create-qr').addEventListener('click', async () => {
   const run = ++qrRun;
   $('create-qr').disabled = true;
   try {
-    await api('qr/create', {});
+    await api('qr/create', { platform: $('qr-platform').value });
     $('qr').hidden = false;
-    $('qr-status').textContent = '请使用网易云音乐 App 扫码。';
+    $('qr-status').textContent = '请使用所选音乐 App 扫码。';
     $('qr-image').src = '/admin/api/qr/image?t=' + Date.now();
     timer = setTimeout(() => poll(run), 2500);
   } catch (error) { notice(error.message); }

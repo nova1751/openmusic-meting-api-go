@@ -1,6 +1,6 @@
 # OpenMusic Meting API Go
 
-[OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) 的 Go 移植版，原生支持网易云及部分 QQ 音乐功能。可选的 Node.js 兼容服务保留原版管理后台及四平台功能。
+[OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) 的 Go 移植版，原生接入网易云、QQ 音乐、酷狗和汽水音乐。可选的 Node.js 兼容服务保留原版后台及其工作流。
 
 [English](./README.md) · [发行版本](https://github.com/nova1751/openmusic-meting-api-go/releases) · [迁移指南](./docs/MIGRATE_NODE_TO_GO.md)
 
@@ -9,13 +9,12 @@
 | 功能 | 独立 Go | Go + Node.js 兼容部署 |
 | --- | --- | --- |
 | 网易云歌曲、歌单、专辑、搜索、歌手、电台、封面、普通及结构化歌词 | Go | Go |
-| 网易云播放地址和私人漫游 | Go，使用本地账号配置 | Node.js，使用现有账号池和辅助服务 |
-| 网易云房间私有接口 | Go | Node.js |
-| QQ 音乐歌曲、歌单、搜索、封面、普通歌词及取链 | Go，播放可用性由 QQ 音乐决定 | Node.js |
-| QQ 音乐私人漫游、汽水音乐、酷狗音乐 | 需要兼容部署 | Node.js |
-| 原管理后台、四平台扫码、监控 | 需要兼容部署 | Node.js |
-| 精简管理页、网易云扫码、双重验证、加密备份 | 可选；功能范围较小 | 原版后台 |
-| OpenMusic 令牌和请求签名 | Go | 使用 Node.js 的现有令牌、授权设置和防重放机制 |
+| 四平台曲库、取链和漫游 | Go，取链和漫游依赖授权账号与上游配置 | Node.js |
+| 房间私有音乐和漫游 | Go | Node.js |
+| 汽水音频源信息、解密和范围读取 | Go | Node.js |
+| Cookie 管理、扫码、API Token、双重验证和快照 | 原生后台，汽水扫码需要 Chromium 和 SDK 资源 | 原版后台 |
+| 交互式验证、多用户、监测和 Webhook | 使用兼容部署 | Node.js |
+| OpenMusic 令牌和请求签名 | Go | 使用原 Node.js 令牌和签名设置 |
 | 存活与就绪检查 | `/livez` 和 `/readyz` | `/livez` 和 `/readyz` |
 
 ## 快速开始
@@ -89,7 +88,7 @@ PY
 
 如果只想验证本地签名，把示例中的目标改为 `target = "/test"`。该端点直接返回 `{"api":"/api","status":"ok"}`，无需访问网易云。
 
-请将令牌保留在服务端。签名和请求规则见 [OpenMusic 授权协议](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb9030ff2b8ab295c213f8542807c1a95e6cf540/docs/OPENMUSIC_AUTH.md)，响应格式和兼容差异见 [实现说明](./docs/IMPLEMENTATION.md)。
+请将令牌保留在服务端。签名和请求规则见 [OpenMusic 授权协议](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb1d08dcf81ea1f63a75fb344f7a60b49492d9f5/docs/OPENMUSIC_AUTH.md)，响应格式和兼容差异见 [实现说明](./docs/IMPLEMENTATION.md)。
 
 ### 配置
 
@@ -101,9 +100,9 @@ PY
 ]
 ```
 
-QQ 账号可用同样的数组格式通过 `TENCENT_ACCOUNTS_FILE` 配置。未配置账号时会尝试
-免登录取链，实际能否播放由 QQ 音乐决定；账号挑战处理、设备认证、自动刷新和
-QQ 扫码仍需要兼容服务。
+QQ、酷狗、汽水使用同样的数组格式，分别由 TENCENT_ACCOUNTS_FILE、
+KUGOU_ACCOUNTS_FILE 和 QISHUI_ACCOUNTS_FILE 加载。汽水取链沿用旧配置中的
+签名服务，也可通过 QISHUI_SIGNER_URL 设置。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -117,7 +116,7 @@ QQ 扫码仍需要兼容服务。
 | `METING_COOKIE_KEY_FILE` | 旧数据目录内的密钥文件 | 旧版 Cookie 加密密钥路径 |
 | `METING_COOKIE_ENCRYPTION_KEY` | 未设置 | 旧版使用的环境变量密钥；优先于密钥文件 |
 | `METING_NODE_TOKEN_NAME` | 未设置 | 未设置 `METING_API_TOKEN` 时读取指定名称的旧 Token；撤销后请求立即失败 |
-| `METING_NATIVE_ADMIN` | `false` | 启用精简网易云管理页；API 必须只监听回环地址 |
+| `METING_NATIVE_ADMIN` | `false` | 启用原生管理页；API 必须只监听回环地址 |
 | `METING_SITE_GATEWAY_CONFIG` | 未设置 | 可选的网站网关 JSON 配置文件 |
 | `METING_SITE_GATEWAY_ADDR` | `127.0.0.1:3358` | 网站网关监听地址；只允许回环地址 |
 | `MUSIC_ORIGIN_SECRET` | 未设置 | 网站网关与可信边缘代理共享的密钥，至少 32 字节 |
@@ -127,12 +126,13 @@ QQ 扫码仍需要兼容服务。
 | `LEGACY_URL` | 未设置 | 可选 Node.js 服务的内网地址 |
 | `LEGACY_BRIDGE_KEY` | 未设置 | Go 服务与 Node.js 桥接服务共用的内部密钥 |
 
-`METING_NATIVE_ADMIN=true` 要求 `PUBLIC_BASE_URL` 指向管理页 HTTPS 源站，
-`METING_NODE_DATA_DIR` 指向旧数据副本，并沿用原管理员登录。原生管理页支持
-网易云扫码、账号启停和双重验证，但不包含原后台的 QQ 扫码、
-多用户管理和监控配置。首次登录会创建受限权限的强哈希文件；
-旧密码文件保留以便回滚；在原生页面修改密码不会修改旧版密码。原生管理页启用时，
-旧 Node 进程不能同时写入同一数据目录。
+`METING_NATIVE_ADMIN=true` 需要 HTTPS 公共源站、回环监听和含现有管理员的
+旧数据副本。登录兼容旧版和 scrypt 密码。QQ 续期需要原 Cookie 中的设备档案和续期凭据。
+汽水普通扫码依赖 Chromium 和现有 SDK 资源，详见迁移指南。QQ QRC、QQ 交互式验证、
+汽水二次验证、多用户及监测仍使用兼容服务。
+
+首次登录生成独立的 Go 密码文件。回滚使用旧 Node 用户文件中的密码。
+每个数据目录同一时间由一个进程写入。
 
 原生管理页遵循旧数据中的备份开关：启动时、账号状态变更后和本地每天零点创建
 受限权限快照，最近 7 份保存在 `go-native-backups`。如果 Cookie 密钥通过
@@ -192,7 +192,7 @@ BUILDX_BUILDER=meting-release ./scripts/build-docker-release.sh v0.1.0
 
 ## 致谢
 
-Go 移植版由 [nova1751](https://github.com/nova1751) 维护，沿用了 [OpenMusic-Meting-API 的 `fb9030f` 版本](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb9030ff2b8ab295c213f8542807c1a95e6cf540) 的接口约定和部分网易云请求格式。上游软件包标注的作者为 xizeyoupan，并声明采用 MIT 许可证。本项目是独立的社区项目，与上游项目和所支持的音乐平台均无隶属关系。上游和第三方署名见 [NOTICE.md](./NOTICE.md)。
+Go 移植版由 [nova1751](https://github.com/nova1751) 维护，沿用了 [OpenMusic-Meting-API 的 `fb1d08d` 版本](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb1d08dcf81ea1f63a75fb344f7a60b49492d9f5) 的接口约定和部分网易云请求格式。上游软件包标注的作者为 xizeyoupan，并声明采用 MIT 许可证。本项目是独立的社区项目，与上游项目和所支持的音乐平台均无隶属关系。上游和第三方署名见 [NOTICE.md](./NOTICE.md)。
 
 ## 许可证
 

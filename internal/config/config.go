@@ -18,24 +18,27 @@ import (
 )
 
 type Config struct {
-	Addr              string
-	PublicBase        *url.URL
-	LegacyURL         *url.URL
-	BridgeKey         string
-	Token             string
-	RequireAssertion  bool
-	Accounts          []music.Account
-	TencentAccounts   []music.Account
-	RequestTimeout    time.Duration
-	DJPageDelay       time.Duration
-	SiteGatewayConfig string
-	SiteGatewayAddr   string
-	SiteGatewaySecret string
-	NodeDataDir       string
-	NodeTokenName     string
-	CookieKeyFile     string
-	CookieKeyValue    string
-	NativeAdmin       bool
+	Addr               string
+	PublicBase         *url.URL
+	LegacyURL          *url.URL
+	BridgeKey          string
+	Token              string
+	RequireAssertion   bool
+	StoredAuthSetting  bool
+	Accounts           map[string][]music.Account
+	QishuiSigner       string
+	QishuiAssetsDir    string
+	QishuiChromiumPath string
+	RequestTimeout     time.Duration
+	DJPageDelay        time.Duration
+	SiteGatewayConfig  string
+	SiteGatewayAddr    string
+	SiteGatewaySecret  string
+	NodeDataDir        string
+	NodeTokenName      string
+	CookieKeyFile      string
+	CookieKeyValue     string
+	NativeAdmin        bool
 }
 
 func Load() (Config, error) {
@@ -47,7 +50,10 @@ func Load() (Config, error) {
 		SiteGatewayAddr:   os.Getenv("METING_SITE_GATEWAY_ADDR"),
 		SiteGatewaySecret: os.Getenv("MUSIC_ORIGIN_SECRET"),
 		NodeDataDir:       os.Getenv("METING_NODE_DATA_DIR"), CookieKeyFile: os.Getenv("METING_COOKIE_KEY_FILE"),
-		CookieKeyValue: os.Getenv("METING_COOKIE_ENCRYPTION_KEY"),
+		CookieKeyValue:     os.Getenv("METING_COOKIE_ENCRYPTION_KEY"),
+		QishuiAssetsDir:    os.Getenv("QISHUI_SECURITY_ASSETS_DIR"),
+		QishuiChromiumPath: os.Getenv("QISHUI_CHROMIUM_PATH"),
+		QishuiSigner:       strings.TrimSpace(os.Getenv("QISHUI_SIGNER_URL")),
 	}
 	if cfg.Addr == "" {
 		port := os.Getenv("PORT")
@@ -76,14 +82,25 @@ func Load() (Config, error) {
 		strings.ContainsAny(cfg.BridgeKey, "\r\n") || strings.TrimSpace(cfg.BridgeKey) != cfg.BridgeKey) {
 		return cfg, errors.New("LEGACY_BRIDGE_KEY requires LEGACY_URL and at least 32 characters without surrounding whitespace")
 	}
-	if cfg.LegacyURL == nil && (len(cfg.Token) < 32 || strings.ContainsAny(cfg.Token, " \r\n\t")) {
-		return cfg, errors.New("METING_API_TOKEN must have at least 32 non-space characters in standalone mode")
+	if cfg.LegacyURL == nil {
+		validToken := len(cfg.Token) >= 32 && !strings.ContainsAny(cfg.Token, " \r\n\t")
+		if !validToken && cfg.Token == "" && cfg.NodeDataDir != "" {
+			validToken, err = migrate.HasTokens(cfg.NodeDataDir)
+			if err != nil {
+				return cfg, err
+			}
+		}
+		if !validToken {
+			return cfg, errors.New("standalone mode requires METING_API_TOKEN or an existing stored API token")
+		}
 	}
 	if value := os.Getenv("OPENMUSIC_AUTH_ENABLED"); value != "" {
 		cfg.RequireAssertion, err = strconv.ParseBool(value)
 		if err != nil {
 			return cfg, errors.New("invalid OPENMUSIC_AUTH_ENABLED")
 		}
+	} else {
+		cfg.StoredAuthSetting = cfg.NodeDataDir != ""
 	}
 	if value := os.Getenv("METING_NATIVE_ADMIN"); value != "" {
 		cfg.NativeAdmin, err = strconv.ParseBool(value)
@@ -111,19 +128,20 @@ func Load() (Config, error) {
 		return cfg, errors.New("METING_NODE_DATA_DIR is only available in standalone mode")
 	}
 	if cfg.LegacyURL == nil {
-		nodeDir := cfg.NodeDataDir
-		if nodeDir != "" {
-			if os.Getenv("NETEASE_ACCOUNTS_FILE") != "" || os.Getenv("TENCENT_ACCOUNTS_FILE") != "" {
+		cfg.Accounts = make(map[string][]music.Account)
+		for _, platform := range []string{"netease", "tencent", "kugou", "qishui"} {
+			name := strings.ToUpper(platform) + "_ACCOUNTS_FILE"
+			path := os.Getenv(name)
+			if cfg.NodeDataDir != "" && path != "" {
 				return cfg, errors.New("METING_NODE_DATA_DIR cannot be combined with separate account files")
 			}
-			var imported map[string][]music.Account
-			imported, err = migrate.Accounts(nodeDir, cfg.CookieKeyFile, cfg.CookieKeyValue)
-			cfg.Accounts, cfg.TencentAccounts = imported["netease"], imported["tencent"]
-		} else {
-			cfg.Accounts, err = accounts(os.Getenv("NETEASE_ACCOUNTS_FILE"), "NETEASE_ACCOUNTS_FILE")
-			if err == nil {
-				cfg.TencentAccounts, err = accounts(os.Getenv("TENCENT_ACCOUNTS_FILE"), "TENCENT_ACCOUNTS_FILE")
+			cfg.Accounts[platform], err = accounts(path, name)
+			if err != nil {
+				return cfg, err
 			}
+		}
+		if cfg.NodeDataDir != "" {
+			cfg.Accounts, err = migrate.Accounts(cfg.NodeDataDir, cfg.CookieKeyFile, cfg.CookieKeyValue)
 		}
 	}
 	return cfg, err

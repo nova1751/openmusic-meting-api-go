@@ -17,8 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nova1751/openmusic-meting-api-go/internal/kugou"
 	"github.com/nova1751/openmusic-meting-api-go/internal/migrate"
+	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 	"github.com/nova1751/openmusic-meting-api-go/internal/netease"
+	"github.com/nova1751/openmusic-meting-api-go/internal/qishui"
+	"github.com/nova1751/openmusic-meting-api-go/internal/tencent"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -28,6 +32,10 @@ var assets embed.FS
 type Admin struct {
 	dataDir, keyFile, keyValue, origin string
 	client                             *netease.Client
+	validators                         map[string]music.AccountValidator
+	kugou                              *kugou.Client
+	tencent                            *tencent.Client
+	qishui                             *qishui.QRBrowser
 	mu                                 sync.Mutex
 	authMu                             sync.Mutex
 	writeMu                            sync.Mutex
@@ -36,7 +44,7 @@ type Admin struct {
 	attempts                           map[[32]byte]loginAttempt
 }
 
-func New(dataDir, keyFile, keyValue, origin string, client *netease.Client) (*Admin, error) {
+func New(dataDir, keyFile, keyValue, origin string, client *netease.Client, kg *kugou.Client, qq *tencent.Client, qs *qishui.QRBrowser, validators map[string]music.AccountValidator) (*Admin, error) {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
 		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" ||
@@ -57,7 +65,7 @@ func New(dataDir, keyFile, keyValue, origin string, client *netease.Client) (*Ad
 		return nil, errors.New("native admin requires an existing administrator")
 	}
 	return &Admin{dataDir: dataDir, keyFile: keyFile, keyValue: keyValue, origin: strings.TrimRight(origin, "/"),
-		client: client, sessions: make(map[[32]byte]*session), attempts: make(map[[32]byte]loginAttempt)}, nil
+		client: client, kugou: kg, tencent: qq, qishui: qs, validators: validators, sessions: make(map[[32]byte]*session), attempts: make(map[[32]byte]loginAttempt)}, nil
 }
 
 func reply(w http.ResponseWriter, status int, value any) {
@@ -206,12 +214,19 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.URL.Path == "/admin/config" || strings.HasPrefix(r.URL.Path, "/admin/config/"):
+		a.configRoutes(w, r)
+	case r.URL.Path == "/admin/tokens" || strings.HasPrefix(r.URL.Path, "/admin/tokens/"):
+		a.tokenRoutes(w, r, s)
+	case r.URL.Path == "/admin/cookies" || strings.HasPrefix(r.URL.Path, "/admin/cookies/"):
+		a.accountRoutes(w, r, s)
 	case r.Method == http.MethodGet && r.URL.Path == "/admin/api/session":
 		reply(w, 200, map[string]any{"success": true, "username": s.username, "csrf": s.csrf})
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/api/logout":
 		a.mu.Lock()
 		delete(a.sessions, key)
 		a.mu.Unlock()
+		s.closeQR()
 		http.SetCookie(w, &http.Cookie{Name: "openmusic_admin", Path: "/admin", MaxAge: -1,
 			Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		reply(w, 200, map[string]any{"success": true})
@@ -260,26 +275,32 @@ func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(w, 200, map[string]any{"success": true})
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/api/qr/create":
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		qr, err := a.client.CreateQR(ctx)
-		if err != nil {
-			reject(w, 502, "无法创建网易云二维码，请稍后重试")
-			return
-		}
-		s.mu.Lock()
-		s.qr, s.qrSaved = qr, false
-		s.mu.Unlock()
-		reply(w, 200, map[string]any{"success": true})
+		a.createQR(w, r, s)
 	case r.Method == http.MethodGet && r.URL.Path == "/admin/api/qr/image":
 		s.mu.Lock()
-		qr := s.qr
+		if s.qqQR != nil {
+			png := s.qqQR.PNG()
+			s.mu.Unlock()
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(png)
+			return
+		}
+		var qrURL string
+		if s.qr != nil {
+			qrURL = s.qr.URL()
+		}
+		if s.kugouQR != nil {
+			qrURL = s.kugouQR.URL()
+		}
+		if s.qishuiQR != nil {
+			qrURL = s.qishuiQR.URL()
+		}
 		s.mu.Unlock()
-		if qr == nil {
+		if qrURL == "" {
 			reject(w, 404, "请先创建二维码")
 			return
 		}
-		png, err := qrcode.Encode(qr.URL(), qrcode.Medium, 256)
+		png, err := qrcode.Encode(qrURL, qrcode.Medium, 256)
 		if err != nil {
 			reject(w, 500, "无法生成二维码")
 			return
@@ -298,6 +319,28 @@ func (a *Admin) pollQR(w http.ResponseWriter, r *http.Request, s *session) {
 	defer s.mu.Unlock()
 	if s.qrSaved {
 		reply(w, 200, map[string]any{"success": true, "status": "confirmed"})
+		return
+	}
+	if s.kugouQR != nil {
+		a.pollKugouQR(w, r, s)
+		return
+	}
+	if s.qishuiQR != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		defer cancel()
+		status, cookie, err := s.qishuiQR.Poll(ctx)
+		if err != nil {
+			reject(w, 502, "汽水扫码状态查询失败，请重试")
+			return
+		}
+		a.saveQR(w, ctx, s, "qishui", "汽水扫码登录", status, cookie)
+		return
+	}
+	if s.qqQR != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		defer cancel()
+		status, cookie := s.qqQR.Poll()
+		a.saveQR(w, ctx, s, "tencent", "QQ 音乐扫码登录", status, cookie)
 		return
 	}
 	if s.qr == nil {

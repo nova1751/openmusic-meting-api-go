@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"cmp"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +24,7 @@ type AccountSummary struct {
 	ID       string `json:"id"`
 	Platform string `json:"platform"`
 	Nickname string `json:"nickname"`
+	Note     string `json:"note"`
 	IsActive bool   `json:"isActive"`
 	IsValid  bool   `json:"isValid"`
 	IsVIP    bool   `json:"isVip"`
@@ -32,6 +35,7 @@ func List(dataDir string) ([]AccountSummary, error) {
 		Platform string `json:"platform"`
 		IsActive bool   `json:"isActive"`
 		IsValid  *bool  `json:"isValid"`
+		Note     string `json:"note"`
 		UserInfo struct {
 			Nickname   string `json:"nickname"`
 			IsVIP      bool   `json:"isVip"`
@@ -40,14 +44,18 @@ func List(dataDir string) ([]AccountSummary, error) {
 		} `json:"userInfo"`
 	}
 	if err := readJSON(filepath.Join(dataDir, "cookies.json"), &source); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []AccountSummary{}, nil
+		}
 		return nil, err
 	}
 	result := make([]AccountSummary, 0, len(source))
 	for id, item := range source {
-		result = append(result, AccountSummary{ID: id, Platform: item.Platform, Nickname: item.UserInfo.Nickname,
+		result = append(result, AccountSummary{ID: id, Platform: item.Platform, Nickname: item.UserInfo.Nickname, Note: item.Note,
 			IsActive: item.IsActive, IsValid: item.IsValid == nil || *item.IsValid,
 			IsVIP: item.UserInfo.IsVIP || item.UserInfo.IsSVIP || item.UserInfo.CanPlayVIP})
 	}
+	slices.SortFunc(result, func(a, b AccountSummary) int { return cmp.Compare(a.Platform+"\x00"+a.ID, b.Platform+"\x00"+b.ID) })
 	return result, nil
 }
 
@@ -133,12 +141,9 @@ func SaveNetease(dataDir, keyFile, keyValue, username, cookie string, profile ne
 		return err
 	}
 	path := filepath.Join(dataDir, "cookies.json")
-	var accounts map[string]map[string]json.RawMessage
-	if err := readJSON(path, &accounts); err != nil {
+	accounts, err := entries(path)
+	if err != nil {
 		return err
-	}
-	if accounts == nil {
-		return errors.New("invalid Node account data")
 	}
 	id := ""
 	for candidate, object := range accounts {

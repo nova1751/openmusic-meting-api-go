@@ -123,14 +123,14 @@ func (c *Client) playback(ctx context.Context, req music.Request) (music.Result,
 			continue
 		}
 		if result.Code == 104009 || result.Req.Code == 104009 || result.Req.Data.RetCode == 104009 {
-			return music.Result{}, music.ErrAccountInvalid
+			return music.Result{}, music.ErrVerificationRequired
 		}
 		if result.Code != 0 || result.Req.Code != 0 || len(result.Req.Data.Info) == 0 {
 			continue
 		}
 		info := result.Req.Data.Info[0]
 		if info.Result == 104009 {
-			return music.Result{}, music.ErrAccountInvalid
+			return music.Result{}, music.ErrVerificationRequired
 		}
 		if info.Result != 0 || info.PURL == "" {
 			continue

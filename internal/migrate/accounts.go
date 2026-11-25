@@ -130,14 +130,18 @@ func decrypt(value, id, platform string, key []byte) (string, error) {
 // Accounts returns only active, valid accounts; priorities match Node's saved
 // FM configuration. The data and key files remain untouched.
 func Accounts(dataDir, keyFile, keyValue string) (map[string][]music.Account, error) {
-	key, err := encryptionKey(keyValue, keyFile, dataDir)
-	if err != nil {
-		return nil, err
-	}
 	var source map[string]nodeAccount
 	if err := readJSON(filepath.Join(dataDir, "cookies.json"), &source); err != nil {
-		return nil, fmt.Errorf("read Node accounts: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read Node accounts: %w", err)
+		}
+		info, statErr := os.Stat(dataDir)
+		if statErr != nil || !info.IsDir() {
+			return nil, fmt.Errorf("read Node accounts: %w", err)
+		}
+		return map[string][]music.Account{}, nil
 	}
+	var key []byte
 	var config struct {
 		FM map[string]string `json:"fmPriorityCookieIds"`
 	}
@@ -181,9 +185,15 @@ func Accounts(dataDir, keyFile, keyValue string) (map[string][]music.Account, er
 	seen := map[string]bool{}
 	for _, id := range ids {
 		entry := source[id]
-		if !entry.IsActive || (entry.IsValid != nil && !*entry.IsValid) ||
-			(entry.Platform != "netease" && entry.Platform != "tencent") {
+		if !entry.IsActive || (entry.IsValid != nil && !*entry.IsValid) || !music.KnownPlatform(entry.Platform) {
 			continue
+		}
+		if key == nil && strings.HasPrefix(entry.Cookie, "enc:v1:") {
+			var err error
+			key, err = encryptionKey(keyValue, keyFile, dataDir)
+			if err != nil {
+				return nil, err
+			}
 		}
 		cookie, err := decrypt(entry.Cookie, id, entry.Platform, key)
 		if err != nil {

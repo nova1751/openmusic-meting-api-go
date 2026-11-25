@@ -2,16 +2,13 @@ package netease
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/providerhttp"
 )
 
-const lyricsLimit = 1 << 20
+const lyricsLimit = providerhttp.LyricsLimit
 
 type lyricField struct{ Lyric string }
 
@@ -43,40 +40,10 @@ func (c *Client) lyrics(ctx context.Context, req music.Request) (music.Result, e
 	}
 	if lyrics.WordLyric == "" && len(req.ID) <= 80 {
 		if _, err := parseIDs(req.ID); err == nil {
-			if ttml := c.amll(ctx, req.ID); ttml != "" {
+			if ttml := providerhttp.AMLL(ctx, c.http, "ncmMusicId", req.ID); ttml != "" {
 				lyrics.WordLyric, lyrics.WordFormat, lyrics.Source = ttml, "ttml", "amll"
 			}
 		}
 	}
 	return music.Result{Lyrics: lyrics}, nil
-}
-
-func (c *Client) amll(ctx context.Context, id string) string {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	target := "https://api.amll.dev/v1/lyrics/get?" + url.Values{"ncmMusicId": {id}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return ""
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, lyricsLimit+1))
-	if err != nil || len(body) > lyricsLimit {
-		return ""
-	}
-	var reply struct {
-		Status int
-		Data   struct{ Format, Lyrics string }
-	}
-	if json.Unmarshal(body, &reply) == nil && reply.Status == 200 && reply.Data.Format == "ttml" {
-		return reply.Data.Lyrics
-	}
-	return ""
 }

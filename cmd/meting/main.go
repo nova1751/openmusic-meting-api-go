@@ -21,11 +21,13 @@ import (
 	"github.com/nova1751/openmusic-meting-api-go/internal/auth"
 	"github.com/nova1751/openmusic-meting-api-go/internal/config"
 	"github.com/nova1751/openmusic-meting-api-go/internal/httpapi"
+	"github.com/nova1751/openmusic-meting-api-go/internal/kugou"
 	"github.com/nova1751/openmusic-meting-api-go/internal/legacy"
 	"github.com/nova1751/openmusic-meting-api-go/internal/migrate"
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 	"github.com/nova1751/openmusic-meting-api-go/internal/nativeadmin"
 	"github.com/nova1751/openmusic-meting-api-go/internal/netease"
+	"github.com/nova1751/openmusic-meting-api-go/internal/qishui"
 	"github.com/nova1751/openmusic-meting-api-go/internal/sitegateway"
 	"github.com/nova1751/openmusic-meting-api-go/internal/tencent"
 )
@@ -76,12 +78,31 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	client := upstreamClient(12*time.Second, true)
 	defer client.CloseIdleConnections()
 	neteaseClient := netease.New(client, cfg.DJPageDelay)
+	signer := func() string {
+		if cfg.NodeDataDir != "" {
+			if value := migrate.QishuiSigner(cfg.NodeDataDir); value != "" {
+				return value
+			}
+		}
+		return cfg.QishuiSigner
+	}
+	audioClient := upstreamClient(60*time.Second, true)
+	defer audioClient.CloseIdleConnections()
 	options := httpapi.Options{
-		Verifier: auth.New(cfg.Token, cfg.RequireAssertion),
-		Provider: neteaseClient,
-		Accounts: music.NewAccountPool(cfg.Accounts), PublicBase: cfg.PublicBase,
-		Tencent: tencent.New(client), TencentAccounts: music.NewAccountPool(cfg.TencentAccounts),
-		Timeout: cfg.RequestTimeout, Logger: logger,
+		Verifier:   auth.New(cfg.Token, cfg.RequireAssertion),
+		Sources:    map[string]httpapi.Source{},
+		Audio:      qishui.NewAudio(audioClient),
+		PublicBase: cfg.PublicBase,
+		Timeout:    cfg.RequestTimeout, Logger: logger,
+	}
+	qqClient, kgClient, qsClient := tencent.New(client), kugou.New(client), qishui.New(client, signer)
+	for platform, provider := range map[string]music.Provider{
+		"netease": neteaseClient,
+		"tencent": qqClient,
+		"kugou":   kgClient,
+		"qishui":  qsClient,
+	} {
+		options.Sources[platform] = httpapi.Source{Provider: provider, Accounts: music.NewAccountPool(cfg.Accounts[platform])}
 	}
 	if cfg.NodeTokenName != "" {
 		expected := sha256.Sum256([]byte(cfg.Token))
@@ -94,13 +115,31 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			return subtle.ConstantTimeCompare(expected[:], digest[:]) == 1
 		})
 	}
+	if cfg.NodeDataDir != "" && cfg.NodeTokenName == "" {
+		options.Verifier.SetStoredTokenLookup(func(token string) bool { return migrate.ValidToken(cfg.NodeDataDir, token) })
+	}
+	if cfg.StoredAuthSetting {
+		options.Verifier.SetAssertionSetting(func() bool {
+			settings, err := migrate.Config(cfg.NodeDataDir)
+			return err != nil || settings.OpenMusicAuth
+		})
+	}
 	var nativeManager *nativeadmin.Admin
 	if cfg.NativeAdmin {
 		host, _, err := net.SplitHostPort(cfg.Addr)
 		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 			return errors.New("native admin requires a loopback API listener")
 		}
-		nativeManager, err = nativeadmin.New(cfg.NodeDataDir, cfg.CookieKeyFile, cfg.CookieKeyValue, cfg.PublicBase.String(), neteaseClient)
+		var qishuiQR *qishui.QRBrowser
+		if cfg.QishuiAssetsDir != "" {
+			qishuiQR, err = qishui.NewQRBrowser(ctx, cfg.QishuiAssetsDir, cfg.QishuiChromiumPath)
+			if err != nil {
+				return fmt.Errorf("initialize Qishui scanner: %w", err)
+			}
+		}
+		nativeManager, err = nativeadmin.New(cfg.NodeDataDir, cfg.CookieKeyFile, cfg.CookieKeyValue, cfg.PublicBase.String(), neteaseClient, kgClient, qqClient, qishuiQR, map[string]music.AccountValidator{
+			"tencent": qqClient.Account, "kugou": kgClient.Account, "qishui": qsClient.Account,
+		})
 		if err != nil {
 			return fmt.Errorf("initialize native admin: %w", err)
 		}
@@ -116,8 +155,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 				return accounts[platform], nil
 			}
 		}
-		options.Accounts.SetLoader(accountLoader("netease"))
-		options.TencentAccounts.SetLoader(accountLoader("tencent"))
+		for platform, source := range options.Sources {
+			source.Accounts.SetLoader(accountLoader(platform))
+		}
 	}
 	mode := "standalone"
 	if cfg.LegacyURL != nil {

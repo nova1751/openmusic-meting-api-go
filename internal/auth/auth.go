@@ -45,19 +45,37 @@ type entry struct {
 // Verifier implements the OpenMusic server-to-server contract for one server process.
 type Verifier struct {
 	requireAssertion bool
+	assertionSetting func() bool
 	tokenHash        [sha256.Size]byte
 	now              func() time.Time
 
-	mu         sync.Mutex
-	seen       map[[sha256.Size]byte]struct{}
-	order      list.List
-	tokenValid func() bool
+	mu          sync.Mutex
+	seen        map[[sha256.Size]byte]struct{}
+	order       list.List
+	tokenValid  func() bool
+	storedToken func(string) bool
 }
 
 // SetTokenValidity installs a fail-closed validity check before the server is
 // started. It is useful when importing a revocable token from existing data.
 func (v *Verifier) SetTokenValidity(check func() bool) {
 	v.tokenValid = check
+}
+
+// SetAssertionSetting installs the live administrator setting before serving.
+func (v *Verifier) SetAssertionSetting(read func() bool) {
+	v.assertionSetting = read
+}
+
+func (v *Verifier) signedRequired() bool {
+	if v.assertionSetting != nil {
+		return v.assertionSetting()
+	}
+	return v.requireAssertion
+}
+
+func (v *Verifier) SetStoredTokenLookup(check func(string) bool) {
+	v.storedToken = check
 }
 
 func New(token string, requireAssertion bool) *Verifier {
@@ -79,19 +97,26 @@ func bearer(r *http.Request) string {
 
 // Preflight checks the bearer and required headers before a handler reads its body.
 func (v *Verifier) Preflight(r *http.Request) bool {
+	return v.preflight(r, v.signedRequired())
+}
+
+func (v *Verifier) preflight(r *http.Request, required bool) bool {
 	token := bearer(r)
+	if token == "" || len(token) > 1024 || required &&
+		(r.Header.Get("X-OpenMusic-Assertion") == "" || r.Header.Get("X-OpenMusic-Signature") == "") {
+		return false
+	}
 	digest := sha256.Sum256([]byte(token))
-	return token != "" && subtle.ConstantTimeCompare(digest[:], v.tokenHash[:]) == 1 &&
-		(v.tokenValid == nil || v.tokenValid()) &&
-		(!v.requireAssertion || (r.Header.Get("X-OpenMusic-Assertion") != "" &&
-			r.Header.Get("X-OpenMusic-Signature") != ""))
+	return subtle.ConstantTimeCompare(digest[:], v.tokenHash[:]) == 1 &&
+		(v.tokenValid == nil || v.tokenValid()) || v.storedToken != nil && v.storedToken(token)
 }
 
 func (v *Verifier) Verify(r *http.Request, body []byte) string {
-	if !v.Preflight(r) {
+	required := v.signedRequired()
+	if !v.preflight(r, required) {
 		return Required
 	}
-	if !v.requireAssertion {
+	if !required {
 		return ""
 	}
 	encoded := r.Header.Get("X-OpenMusic-Assertion")

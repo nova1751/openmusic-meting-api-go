@@ -15,8 +15,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
+	"github.com/nova1751/openmusic-meting-api-go/internal/providerhttp"
 )
 
 const maxResponse = 16 << 20
@@ -27,11 +29,9 @@ type Client struct{ http *http.Client }
 
 func New(client *http.Client) *Client { return &Client{http: client} }
 
-// Supports deliberately excludes account-specific FM until its selection and
-// failure semantics have been ported.
 func Supports(kind string) bool {
 	switch kind {
-	case "playlist", "song", "pic", "lrc", "url", "search", "search_playlist":
+	case "playlist", "song", "pic", "lrc", "url", "search", "search_playlist", "fm":
 		return true
 	default:
 		return false
@@ -50,6 +50,8 @@ func (c *Client) Lookup(ctx context.Context, req music.Request) (music.Result, e
 		return c.lyrics(ctx, req)
 	case "url":
 		return c.playback(ctx, req)
+	case "fm":
+		return c.fm(ctx, req)
 	case "search", "search_playlist":
 		return c.search(ctx, req)
 	default:
@@ -58,13 +60,14 @@ func (c *Client) Lookup(ctx context.Context, req music.Request) (music.Result, e
 }
 
 type track struct {
-	SongMID   string `json:"songmid"`
-	MID       string `json:"mid"`
-	SongName  string `json:"songname"`
-	Name      string `json:"name"`
-	Title     string `json:"title"`
-	AlbumMID  string `json:"albummid"`
-	AlbumName string `json:"albumname"`
+	ID        json.Number `json:"id"`
+	SongMID   string      `json:"songmid"`
+	MID       string      `json:"mid"`
+	SongName  string      `json:"songname"`
+	Name      string      `json:"name"`
+	Title     string      `json:"title"`
+	AlbumMID  string      `json:"albummid"`
+	AlbumName string      `json:"albumname"`
 	Album     struct {
 		MID  string `json:"mid"`
 		Name string `json:"name"`
@@ -157,7 +160,9 @@ func (c *Client) request(ctx context.Context, method, address, cookie string, pa
 	if len(data) > maxResponse {
 		return errors.New("tencent response exceeds size limit")
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(out); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return errors.New("invalid tencent response")
 	}
 	return nil
@@ -268,23 +273,43 @@ func (c *Client) lyrics(ctx context.Context, req music.Request) (music.Result, e
 	if !midPattern.MatchString(req.ID) {
 		return music.Result{}, music.ErrInvalidID
 	}
-	query := url.Values{"songmid": {req.ID}, "format": {"json"}, "g_tk": {"5381"},
+	query := url.Values{"format": {"json"}, "g_tk": {"5381"},
 		"inCharset": {"utf8"}, "outCharset": {"utf-8"}, "platform": {"yqq"}, "needNewCode": {"0"}}
+	if _, err := strconv.ParseUint(req.ID, 10, 64); err == nil {
+		query.Set("songid", req.ID)
+	} else {
+		query.Set("songmid", req.ID)
+	}
 	var reply struct {
 		Lyric string `json:"lyric"`
 		Trans string `json:"trans"`
 	}
 	address := "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?" + query.Encode()
-	if err := c.request(ctx, http.MethodGet, address, req.Cookie, nil, &reply); err != nil {
-		return music.Result{}, err
+	requestErr := c.request(ctx, http.MethodGet, address, req.Cookie, nil, &reply)
+	lyrics := music.Lyrics{Source: "lrc"}
+	if requestErr == nil {
+		lyric, err := base64.StdEncoding.DecodeString(reply.Lyric)
+		translation, transErr := base64.StdEncoding.DecodeString(reply.Trans)
+		if err != nil || transErr != nil || len(lyric) > providerhttp.LyricsLimit || len(translation) > providerhttp.LyricsLimit {
+			requestErr = errors.New("invalid tencent lyric encoding")
+		} else {
+			lyrics.Lyric, lyrics.Translation = string(lyric), string(translation)
+		}
 	}
-	lyric, err := base64.StdEncoding.DecodeString(reply.Lyric)
-	if err != nil {
-		return music.Result{}, errors.New("invalid tencent lyric encoding")
+	if req.Format != "json" {
+		return music.Result{Lyrics: lyrics}, requestErr
 	}
-	translation, err := base64.StdEncoding.DecodeString(reply.Trans)
-	if err != nil {
-		return music.Result{}, errors.New("invalid tencent translation encoding")
+	ids := []string{req.ID}
+	if _, err := strconv.ParseUint(req.ID, 10, 64); err != nil {
+		detailCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		info, err := c.songDetails(detailCtx, req.ID)
+		cancel()
+		if id := info.ID.String(); err == nil && midPattern.MatchString(id) && id != req.ID {
+			ids = append([]string{id}, ids...)
+		}
 	}
-	return music.Result{Lyrics: music.Lyrics{Lyric: string(lyric), Translation: string(translation)}}, nil
+	if text := providerhttp.AMLL(ctx, c.http, "qqMusicId", ids...); text != "" {
+		lyrics.WordLyric, lyrics.WordFormat, lyrics.Source = text, "ttml", "amll"
+	}
+	return music.Result{Lyrics: lyrics}, nil
 }

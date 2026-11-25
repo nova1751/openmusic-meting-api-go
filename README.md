@@ -1,6 +1,6 @@
 # OpenMusic Meting API Go
 
-A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) with native NetEase and selected QQ Music functionality. The optional Node.js compatibility service retains the original admin panel and four-provider support.
+A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting-API) with native adapters for NetEase, QQ Music, Qishui Music, and Kugou Music. The optional Node.js compatibility service retains the original admin workflows.
 
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/nova1751/openmusic-meting-api-go/releases) · [Migration guide (Chinese)](./docs/MIGRATE_NODE_TO_GO.md)
 
@@ -9,13 +9,12 @@ A Go port of [OpenMusic-Meting-API](https://github.com/qq01-hub/OpenMusic-Meting
 | Feature | Standalone Go | Go + Node.js compatibility |
 | --- | --- | --- |
 | NetEase tracks, playlists, albums, search, artists, radio, cover art, and plain or structured lyrics | Go | Go |
-| NetEase playback URLs and Personal FM | Go with local account configuration | Node.js with the existing account pool and supporting services |
-| Private NetEase room endpoints | Go | Node.js |
-| QQ Music tracks, playlists, search, covers, plain lyrics, and playback URLs | Go; availability depends on QQ Music | Node.js |
-| QQ Personal FM, Qishui Music, and Kugou Music | Requires compatibility mode | Node.js |
-| Original admin panel, four-provider QR login, and monitoring | Requires compatibility mode | Node.js |
-| Limited admin panel, NetEase QR login, 2FA, and encrypted backups | Optional, limited scope | Original admin panel |
-| OpenMusic token and request signing | Go | Uses the existing Node.js tokens, authorization settings, and replay protection |
+| Four-provider catalog, playback and FM | Go; access depends on the provider credentials and signer | Node.js |
+| Private room music and FM | Go | Node.js |
+| Qishui audio source mode, decryption and range requests | Go | Node.js |
+| Cookie management, QR login, API tokens, 2FA and snapshots | Go admin; Qishui QR needs Chromium and SDK assets | Original admin panel |
+| Interactive verification, users, monitoring and webhooks | Compatibility mode | Node.js |
+| OpenMusic token and request signing | Go | Existing Node.js token store and signing settings |
 | Liveness and readiness endpoints | `/livez` and `/readyz` | `/livez` and `/readyz` |
 
 ## Quick start
@@ -89,7 +88,7 @@ PY
 
 To check signing on your local service, set `target = "/test"` in the example. This endpoint returns `{"api":"/api","status":"ok"}` without contacting NetEase.
 
-Keep the token on the server. See the [OpenMusic authorization protocol](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb9030ff2b8ab295c213f8542807c1a95e6cf540/docs/OPENMUSIC_AUTH.md) for the signing and request rules, and the [implementation notes (Chinese)](./docs/IMPLEMENTATION.md) for response formats and compatibility details.
+Keep the token on the server. See the [OpenMusic authorization protocol](https://github.com/qq01-hub/OpenMusic-Meting-API/blob/fb1d08dcf81ea1f63a75fb344f7a60b49492d9f5/docs/OPENMUSIC_AUTH.md) for the signing and request rules, and the [implementation notes (Chinese)](./docs/IMPLEMENTATION.md) for response formats and compatibility details.
 
 ### Configuration
 
@@ -101,10 +100,9 @@ For standalone playback and Personal FM, point `NETEASE_ACCOUNTS_FILE` to a JSON
 ]
 ```
 
-QQ accounts use the same array format through `TENCENT_ACCOUNTS_FILE`. The service
-also attempts anonymous playback when no account is configured; availability is
-determined by QQ Music. Challenge handling, device authentication, automatic
-refresh and QQ QR login still require the compatibility service.
+QQ Music, Kugou and Qishui use the same array format with TENCENT_ACCOUNTS_FILE,
+KUGOU_ACCOUNTS_FILE and QISHUI_ACCOUNTS_FILE. Qishui playback uses the external
+signer configured in the old data directory or in QISHUI_SIGNER_URL.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
@@ -128,13 +126,13 @@ refresh and QQ QR login still require the compatibility service.
 | `LEGACY_URL` | Unset | Private URL of the optional Node.js service |
 | `LEGACY_BRIDGE_KEY` | Unset | Shared internal key for the Go service and the Node.js bridge |
 
-Native admin requires an HTTPS `PUBLIC_BASE_URL`, a copy of the old data directory,
-and an existing administrator. It supports NetEase QR login, account activation,
-and 2FA, but not QQ QR login, user management, or monitoring.
-Its first successful login creates a restricted, stronger password-hash file while
-retaining the old file for rollback. Native password changes do not change the
-old Node password. Never let Node and native admin write the same
-data directory concurrently.
+Native admin requires an HTTPS public origin, a loopback listener and a copy of the
+original data with an existing administrator. Go supports legacy and scrypt Node
+passwords. QQ account renewal requires saved device and refresh credentials.
+See the migration guide for Chromium and the Qishui security assets.
+
+The first successful login creates a Go admin password file. Rollback uses the
+password in the original Node user file. Run one writer per data directory.
 
 The native admin honors the old backup setting, snapshots at startup, account
 changes and local midnight, and retains seven restricted snapshots in
@@ -196,7 +194,7 @@ BUILDX_BUILDER=meting-release ./scripts/build-docker-release.sh v0.1.0
 
 ## Credits
 
-The Go port is maintained by [nova1751](https://github.com/nova1751). It follows the API contract and selected NetEase request formats from [OpenMusic-Meting-API at `fb9030f`](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb9030ff2b8ab295c213f8542807c1a95e6cf540). The upstream package credits xizeyoupan as its author and declares MIT. This is an independent community project with no affiliation with the upstream project or the supported music services. See [NOTICE.md](./NOTICE.md) for upstream and third-party attribution.
+The Go port is maintained by [nova1751](https://github.com/nova1751). It follows the API contract and selected NetEase request formats from [OpenMusic-Meting-API at `fb1d08d`](https://github.com/qq01-hub/OpenMusic-Meting-API/tree/fb1d08dcf81ea1f63a75fb344f7a60b49492d9f5). The upstream package credits xizeyoupan as its author and declares MIT. This is an independent community project with no affiliation with the upstream project or the supported music services. See [NOTICE.md](./NOTICE.md) for upstream and third-party attribution.
 
 ## License
 

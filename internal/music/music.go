@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	ErrAccountInvalid = errors.New("music account invalid")
-	ErrNoAccount      = errors.New("music account unavailable")
-	ErrNoURL          = errors.New("music URL unavailable")
-	ErrInvalidID      = errors.New("invalid music ID")
-	LyricID           = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+	ErrVerificationRequired = errors.New("provider verification required")
+	ErrAccountInvalid       = errors.New("music account invalid")
+	ErrNoAccount            = errors.New("music account unavailable")
+	ErrNoURL                = errors.New("music URL unavailable")
+	ErrInvalidID            = errors.New("invalid music ID")
+	LyricID                 = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
 )
 
 type Request struct {
@@ -35,6 +36,12 @@ type Pagination struct {
 
 // Item holds provider IDs or direct URLs until the HTTP handler builds public links.
 type Item struct {
+	Name       string          `json:"name,omitempty"`
+	Artist     string          `json:"artist,omitempty"`
+	Source     string          `json:"source,omitempty"`
+	Cover      string          `json:"cover,omitempty"`
+	Creator    string          `json:"creator,omitempty"`
+	PlayCount  *int64          `json:"playCount,omitempty"`
 	ID         string          `json:"id,omitempty"`
 	Title      string          `json:"title"`
 	Author     string          `json:"author"`
@@ -48,10 +55,12 @@ type Item struct {
 }
 
 type Link struct {
-	URL      string             `json:"url"`
-	Quality  string             `json:"quality"`
-	Duration int64              `json:"duration,omitempty"`
-	Loudness map[string]float64 `json:"loudness"`
+	PlayAuth  string             `json:"-"`
+	MediaType string             `json:"-"`
+	URL       string             `json:"url"`
+	Quality   string             `json:"quality"`
+	Duration  int64              `json:"duration,omitempty"`
+	Loudness  map[string]float64 `json:"loudness"`
 }
 
 type Lyrics struct {

@@ -10,6 +10,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,11 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/nova1751/openmusic-meting-api-go/internal/kugou"
 	"github.com/nova1751/openmusic-meting-api-go/internal/netease"
+	"github.com/nova1751/openmusic-meting-api-go/internal/qishui"
+	"github.com/nova1751/openmusic-meting-api-go/internal/tencent"
+	"golang.org/x/crypto/scrypt"
 )
 
 const passwordIterations = 310000
@@ -46,6 +51,9 @@ type session struct {
 	csrf         string
 	expires      time.Time
 	qr           *netease.QRSession
+	kugouQR      *kugou.QRSession
+	qqQR         *tencent.QRSession
+	qishuiQR     *qishui.QRSession
 	qrSaved      bool
 	pendingTOTP  string
 	totpAttempts int
@@ -86,6 +94,28 @@ func legacyHash(password string) string {
 		hash = hash*31 + int32(code)
 	}
 	return strconv.FormatInt(int64(hash), 16)
+}
+
+func verifyNodePassword(password, stored string) bool {
+	const prefix = "scrypt:v1:"
+	encoded, isScrypt := strings.CutPrefix(stored, prefix)
+	if !isScrypt {
+		return equal(legacyHash(password), stored)
+	}
+	salt, digest, ok := strings.Cut(encoded, ":")
+	if !ok || len(salt) != 32 || len(digest) != 64 {
+		return false
+	}
+	if _, err := hex.DecodeString(salt); err != nil {
+		return false
+	}
+	expected, err := hex.DecodeString(digest)
+	if err != nil {
+		return false
+	}
+	// Node passes the hexadecimal salt as UTF-8, with these scrypt defaults.
+	actual, err := scrypt.Key([]byte(password), []byte(salt), 16384, 8, 1, len(expected))
+	return err == nil && subtle.ConstantTimeCompare(actual, expected) == 1
 }
 
 func equal(a, b string) bool {
@@ -188,7 +218,7 @@ func (a *Admin) authenticate(username, password, code string) (bool, bool, error
 		}
 		valid = subtle.ConstantTimeCompare(derived, expected) == 1
 	} else {
-		valid = equal(legacyHash(password), entry.Password) && exists
+		valid = exists && entry.Role == "admin" && verifyNodePassword(password, entry.Password)
 	}
 	valid = valid && exists && entry.Role == "admin"
 	if valid && entry.TwoFactorEnabled && code == "" {

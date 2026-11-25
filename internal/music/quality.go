@@ -61,17 +61,15 @@ func RequiredMembership(neteaseQuality string) Membership {
 // RequiredMembershipForPlatform reflects the highest requested quality, not
 // whether the provider will actually grant access to an individual track.
 func RequiredMembershipForPlatform(platform, quality string) Membership {
-	if platform != "tencent" {
-		return RequiredMembership(quality)
-	}
 	switch NormalizeQuality(quality) {
-	case "atmos", "master":
+	case "atmos", "master", "studio", "viper_atmos", "viper_tape", "viper_clear", "viper_hifi", "acappella", "multitrack":
 		return SVIP
-	case "exhigh", "lossless":
-		return VIP
-	default:
-		return Free
+	case "lossless":
+		if platform == "qishui" {
+			return SVIP
+		}
 	}
+	return RequiredMembership(quality)
 }
 
 func NeteaseQualityName(quality string) string {

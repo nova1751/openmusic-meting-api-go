@@ -6,9 +6,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,17 +20,25 @@ import (
 	"github.com/nova1751/openmusic-meting-api-go/internal/music"
 )
 
+type Source struct {
+	Provider music.Provider
+	Accounts *music.AccountPool
+}
+
+type Audio interface {
+	http.Handler
+	Issue(music.Link) (url.Values, error)
+}
+
 type Options struct {
-	Verifier        *auth.Verifier
-	Provider        music.Provider
-	Accounts        *music.AccountPool
-	Tencent         music.Provider
-	TencentAccounts *music.AccountPool
-	Legacy          *legacy.Backend
-	Admin           http.Handler
-	PublicBase      *url.URL
-	Timeout         time.Duration
-	Logger          *slog.Logger
+	Verifier   *auth.Verifier
+	Sources    map[string]Source
+	Audio      Audio
+	Legacy     *legacy.Backend
+	Admin      http.Handler
+	PublicBase *url.URL
+	Timeout    time.Duration
+	Logger     *slog.Logger
 }
 
 type Server struct{ Options }
@@ -81,7 +92,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		jsonResponse(w, 200, map[string]any{"name": "OpenMusic Meting API Go", "api": "/api", "platforms": []string{"netease"}})
+		jsonResponse(w, 200, map[string]any{"name": "OpenMusic Meting API Go", "api": "/api", "platforms": slices.Sorted(maps.Keys(s.Sources))})
 	case "/api", "/test", "/admin/openmusic", "/admin/fm", "/audio/qishui":
 		s.programmatic(w, r)
 	default:
@@ -117,7 +128,11 @@ func (s *Server) programmatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.Timeout)
+	timeout := s.Timeout
+	if path == "/audio/qishui" {
+		timeout = max(timeout, 65*time.Second)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	r = r.WithContext(ctx)
 	var cookie string
@@ -164,7 +179,11 @@ func (s *Server) programmatic(w http.ResponseWriter, r *http.Request) {
 	case "/test":
 		jsonResponse(w, 200, map[string]string{"status": "ok", "api": "/api"})
 	case "/audio/qishui":
-		fail(w, 501, "PLATFORM_NOT_CONFIGURED", "汽水音频需要兼容服务")
+		if s.Audio == nil {
+			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "汽水音频服务未配置")
+			return
+		}
+		s.Audio.ServeHTTP(w, r)
 	case "/admin/fm":
 		s.roomFM(w, r, body)
 	case "/api", "/admin/openmusic":
@@ -182,7 +201,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request, cookie string) {
 	req := publicRequest(q)
 	if room {
 		req.Platform, req.Type, req.ID = normalized(q.Get("server")), normalized(q.Get("type")), strings.TrimSpace(q.Get("id"))
-		req.Redirect, req.Format = false, ""
+		req.Redirect = false
 	}
 	req.Cookie = cookie
 	if req.Type == "lrc" && req.Format == "json" && !music.LyricID.MatchString(req.ID) {
@@ -214,29 +233,34 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request, cookie string) {
 		fail(w, 400, "MUSIC_COOKIE_REQUIRED", "房间音源登录凭证为空")
 		return
 	}
-	provider, accounts := s.Provider, s.Accounts
-	if req.Platform != "netease" {
-		supported, ok := s.Tencent.(interface{ Supports(string) bool })
-		if req.Platform != "tencent" || !ok || !supported.Supports(req.Type) {
-			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台或功能需要兼容服务")
-			return
-		}
-		provider, accounts = s.Tencent, s.TencentAccounts
-		if accounts == nil {
-			accounts = music.NewAccountPool(nil)
-		}
+	source, ok := s.Sources[req.Platform]
+	if !ok {
+		fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台未配置")
+		return
 	}
 	var result music.Result
 	if s.Legacy != nil || room {
-		result, err = provider.Lookup(r.Context(), req)
+		result, err = source.Provider.Lookup(r.Context(), req)
 	} else {
-		result, err = accounts.Lookup(r.Context(), req, provider)
+		result, err = source.Accounts.Lookup(r.Context(), req, source.Provider)
 	}
 	if err != nil {
 		s.upstreamError(w, r.URL.Path, req.Platform, err)
 		return
 	}
-	if room {
+	if req.Platform == "qishui" && req.Type == "url" && result.Link.PlayAuth != "" {
+		if s.Audio == nil {
+			fail(w, 501, "PLATFORM_NOT_CONFIGURED", "汽水音频服务未配置")
+			return
+		}
+		q, err := s.Audio.Issue(result.Link)
+		if err != nil {
+			s.upstreamError(w, r.URL.Path, req.Platform, err)
+			return
+		}
+		result.Link.URL = strings.TrimSuffix(s.apiBase(r), "/api") + "/audio/qishui?" + q.Encode()
+	}
+	if room && !(req.Type == "lrc" && req.Format == "json") {
 		writeRoom(w, req.Type, result)
 		return
 	}
@@ -246,7 +270,10 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request, cookie string) {
 func normalized(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 
 func (s *Server) roomFM(w http.ResponseWriter, r *http.Request, body []byte) {
-	var input struct{ Platform, Cookie, Mode string }
+	var input struct {
+		Platform, Cookie, Mode string
+		ExcludeIDs             []json.RawMessage
+	}
 	if json.Unmarshal(body, &input) != nil {
 		fail(w, 400, "INVALID_REQUEST", "请求格式无效")
 		return
@@ -257,17 +284,51 @@ func (s *Server) roomFM(w http.ResponseWriter, r *http.Request, body []byte) {
 		fail(w, 400, "INVALID_FM_REQUEST", "漫游平台或登录凭证无效")
 		return
 	}
-	if platform != "netease" {
-		fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台需要兼容服务")
+	source, ok := s.Sources[platform]
+	if !ok {
+		fail(w, 501, "PLATFORM_NOT_CONFIGURED", "此平台未配置")
 		return
 	}
-	result, err := s.Provider.Lookup(r.Context(), music.Request{Platform: platform, Type: "fm", Cookie: cookie, ID: strings.TrimSpace(input.Mode)})
-	if err != nil {
-		status, code, message := classify(err)
-		jsonResponse(w, status, map[string]any{"success": false, "code": code, "error": message, "data": []music.Item{}})
-		return
+	req := music.Request{Platform: platform, Type: "fm", Cookie: cookie, ID: strings.TrimSpace(input.Mode)}
+	batches := 1
+	excluded := make(map[string]bool)
+	if platform == "qishui" {
+		batches = 3
+		for _, raw := range input.ExcludeIDs {
+			var id string
+			if json.Unmarshal(raw, &id) != nil {
+				var number json.Number
+				if json.Unmarshal(raw, &number) != nil {
+					continue
+				}
+				id = number.String()
+			}
+			excluded[strings.TrimSpace(id)] = true
+		}
 	}
-	jsonResponse(w, 200, map[string]any{"success": true, "data": nonNilItems(result.Items)})
+	songs := []music.Item{}
+	for range batches {
+		result, err := source.Provider.Lookup(r.Context(), req)
+		if err != nil {
+			status, code, message := classify(err)
+			jsonResponse(w, status, map[string]any{"success": false, "code": code, "error": message, "data": []music.Item{}})
+			return
+		}
+		if platform != "qishui" {
+			songs = nonNilItems(result.Items)
+			break
+		}
+		for _, item := range result.Items {
+			if !excluded[item.ID] {
+				songs = append(songs, item)
+			}
+		}
+		if len(songs) > 0 {
+			rand.Shuffle(len(songs), func(i, j int) { songs[i], songs[j] = songs[j], songs[i] })
+			break
+		}
+	}
+	jsonResponse(w, 200, map[string]any{"success": true, "data": songs})
 }
 
 func jsonResponse(w http.ResponseWriter, status int, body any) {
@@ -305,6 +366,8 @@ func classify(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, music.ErrInvalidID):
 		return 400, "INVALID_MUSIC_REQUEST", "资源 ID 无效"
+	case errors.Is(err, music.ErrVerificationRequired):
+		return 422, "MUSIC_VERIFICATION_REQUIRED", "账号需要完成上游平台验证"
 	case errors.Is(err, music.ErrAccountInvalid):
 		return 422, "MUSIC_ACCOUNT_INVALID", "账号已无法使用，请重新登录"
 	case errors.Is(err, music.ErrNoAccount):
